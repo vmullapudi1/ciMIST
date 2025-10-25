@@ -2,7 +2,7 @@ from typing import Any, Callable, Sequence, Optional
 from functools import partial
 import jax
 from jax import jit, vmap, numpy as jnp, lax
-from jaxlib.xla_extension import Device
+from jax import Device
 from .host_callback_utils import call_jax_other_device
 
 Array = jnp.ndarray
