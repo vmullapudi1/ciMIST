@@ -139,13 +139,20 @@ def m_step(
     # Get the closed-form maximum expected log likelihood estimate for mu
     mu = mu_mle(theta, r)
 
+    # Fixed responsibilities and means need only these statistics during BFGS.
+    weighted_cosine = ((r.T @ jnp.cos(theta)) * jnp.cos(mu)
+                       + (r.T @ jnp.sin(theta)) * jnp.sin(mu))
+    weight_term = jnp.sum(xlogy(w, w))
+
     # define the loss function for kappa and optimize using bfgs
     def negative_ell(p):
         # expected log likelihood of the kappa parameters
         _p = p.reshape(kappa.shape)
         kappas = scale_kappa(_p)
         # log likelihood per observation
-        return -expected_log_likelihood(theta, mu, kappas, r, w, mask) / M
+        terms = jnp.where(mask, kappas * weighted_cosine
+                          - w[:, None] * jnp.log(2*jnp.pi*i0(kappas)), 0.0)
+        return -(jnp.sum(terms) + weight_term) / M
     
     x0 = kappa.flatten()
     solver_options = dict(gtol=gtol, maxiter=maxiter, line_search_maxiter=line_search_maxiter)
