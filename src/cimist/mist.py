@@ -1,3 +1,6 @@
+from heapq import merge
+import math
+from networkx.utils import UnionFind
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -591,6 +594,7 @@ def compute_all_MI_CL(tree, verbose=False):
     return tree
 
 def residue_pseudojackknife(tree):
+    prepared = _PresortedDeletionMST(tree.MI_graph, weight="I")
     entropies = []
     contributions = []
     for n in tree.nodes():
@@ -599,7 +603,8 @@ def residue_pseudojackknife(tree):
 
         # estimator="mle" ensures time is not spent re-computing posterior mean entropies
         # with little effect on estimated variance
-        tree_resamp = MIST(G, N_obs=tree.N_obs, entropy_estimator="mle", calculate_marginals=False, uncertainty=False, prior=tree.prior)
+        prefitted_tree, _ = prepared.tree_without(n)
+        tree_resamp = MIST(G, N_obs=tree.N_obs, tree=prefitted_tree, entropy_estimator="mle", calculate_marginals=False, uncertainty=False, prior=tree.prior)
         
         entropies.append(tree_resamp.entropy())
         contributions.append(tree_resamp.residue_entropies() - 0.5*tree_resamp.residue_sum_MIs())
@@ -709,3 +714,70 @@ def _validate_prior(prior):
     if prior not in VALID_PRIORS:
         raise ValueError(f"Argument 'prior' must be one of '{VALID_PRIORS}'")
     return prior
+
+class _PresortedDeletionMST:
+    """Reuse the canonical deletion forest with fixed topology and weights.
+
+    Stable Kruskal ranks preserve ties and insertion order. Current attribute
+    values remain shared; only O(R) base ranks/adjacency are added to the
+    existing O(E) ranked edge references. No probability arrays are copied.
+    """
+    def __init__(self,graph,weight='I'):
+        if graph.is_directed() or graph.is_multigraph():raise ValueError('Requires a simple undirected graph')
+        self.graph,self.weight=graph,weight
+        edges=[]
+        for u,v,data in graph.edges(data=True):
+            w=data.get(weight,1)
+            if math.isnan(w):raise ValueError('NaN edge weight')
+            edges.append((w,u,v,data))
+        self.edges=sorted(edges,key=lambda e:e[0],reverse=True)
+        self.base_ranks = []
+        self.adjacency = {node: [] for node in graph}
+        uf = UnionFind()
+        for rank, (_, u, v, _) in enumerate(self.edges):
+            if uf[u] != uf[v]:
+                uf.union(u, v)
+                self.base_ranks.append(rank)
+                self.adjacency[u].append(v)
+                self.adjacency[v].append(u)
+                if len(self.base_ranks) == len(graph) - 1:
+                    break
+
+    def tree_without(self,removed,early_stop=True):
+        graph=self.graph
+        tree=graph.__class__();tree.graph.update(graph.graph)
+        tree.add_nodes_from((n,d) for n,d in graph.nodes.items() if n!=removed)
+        # Surviving canonical edges remain mandatory by the cut property.
+        kept = [rank for rank in self.base_ranks if removed not in self.edges[rank][1:3]]
+        bridges = []
+        visited = 0
+        complete = len(tree) <= 1 or (early_stop and len(self.adjacency.get(removed, [])) <= 1)
+        if not complete:
+            labels = {}
+            for node in tree:
+                if node in labels:
+                    continue
+                label = len(labels)
+                labels[node] = label
+                stack = [node]
+                while stack:
+                    for neighbor in self.adjacency[stack.pop()]:
+                        if neighbor != removed and neighbor not in labels:
+                            labels[neighbor] = label
+                            stack.append(neighbor)
+            uf = UnionFind()
+            for rank, (_, u, v, _) in enumerate(self.edges):
+                if u == removed or v == removed:
+                    continue
+                visited += 1
+                if labels[u] == labels[v]:
+                    continue
+                if uf[labels[u]] != uf[labels[v]]:
+                    uf.union(labels[u], labels[v])
+                    bridges.append(rank)
+                    if early_stop and len(kept) + len(bridges) == len(tree) - 1:
+                        break
+        # Restore the original edge/adjacency order, including retained edges.
+        tree.add_edges_from(self.edges[i][1:] for i in merge(kept, bridges))
+        return tree, visited
+
