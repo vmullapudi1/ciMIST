@@ -3,6 +3,8 @@
 """
 Maximum information spanning trees
 """
+from .sparse_probability import SparseProbability, dense_probability
+
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -45,10 +47,22 @@ class MIST:
     @staticmethod
     def from_residue_states(residue_states: ResidueStates, names: List[float],
     entropy_estimator="bayes",
-    prior: str="haldane", uncertainty: bool=True):
+    prior: str="haldane", uncertainty: bool=True, *, pair_batch_size: Optional[int]=None, probability_storage: str="dense"):
         """
         Determine the maximum information (maximum likeihood) spanning tree from residue states.
+        pair_batch_size=None preserves the full pair map. Sparse storage requires an explicit positive batch size.
         """
+
+        if pair_batch_size is not None and (
+                isinstance(pair_batch_size, bool)
+                or not isinstance(pair_batch_size, (int, np.integer))
+                or pair_batch_size <= 0):
+            raise ValueError("pair_batch_size must be a positive integer or None")
+
+        if probability_storage not in ("dense", "sparse"):
+            raise ValueError("probability_storage must be dense or sparse")
+        if probability_storage == "sparse" and pair_batch_size is None:
+            raise ValueError("Sparse storage requires an explicit positive pair_batch_size")
 
         states = residue_states.states_traj
         matrix_size = int(jnp.max(states)+1)
@@ -74,10 +88,30 @@ class MIST:
             return ResidueInteraction(S_uv, S_u, S_v, I_uv, P, S_uv_pos_mean, S_uv_pos_se)
         
         pairwise_interaction_ = jit(pairwise_interaction)
-        pairs = jnp.asarray(list(combinations(list(range(len(names))), 2)))
-        name_pairs = [(names[i], names[j]) for (i,j) in pairs]
-        compute_pairs = vmap(lambda x: pairwise_interaction_(states[x[0]], states[x[1]]))
-        interactions = compute_pairs(pairs)
+        host_pairs = list(combinations(list(range(len(names))), 2))
+        pair_function = lambda x: pairwise_interaction_(states[x[0]], states[x[1]])
+        if probability_storage == "dense":
+            pairs = jnp.asarray(host_pairs)
+            name_pairs = [(names[i], names[j]) for (i,j) in pairs]
+            compute_pairs = (vmap(pair_function) if pair_batch_size is None else
+                             cvmap(pair_function, chunk_size=pair_batch_size))
+            interactions = compute_pairs(pairs)
+            edge_records = zip(name_pairs, interactions.I_uv, interactions.P_uv,
+                               interactions.S_uv_pos_mean, interactions.S_uv_se)
+        else:
+            def sparse_records():
+                # Never concatenate probability batches or retain a dense graph.
+                compute_batch = vmap(pair_function)
+                for start in range(0, len(host_pairs), pair_batch_size):
+                    batch_pairs = host_pairs[start:start + pair_batch_size]
+                    batch = compute_batch(jnp.asarray(batch_pairs))
+                    host_probabilities = np.asarray(batch.P_uv)
+                    for index, (i, j) in enumerate(batch_pairs):
+                        yield ((names[i], names[j]), batch.I_uv[index],
+                               SparseProbability.encode(host_probabilities[index]),
+                               batch.S_uv_pos_mean[index], batch.S_uv_se[index])
+                    del host_probabilities, batch
+            edge_records = sparse_records()
     
         MI_graph = nx.Graph()
         for u, ctz, K in zip(
@@ -93,9 +127,7 @@ class MIST:
             S_se = S_std
             MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=ctz/ctz.sum(), N_states=K)
 
-        for ((u,v), I, P, S_uv, S_se_uv) in zip(
-                name_pairs, interactions.I_uv, interactions.P_uv, interactions.S_uv_pos_mean, interactions.S_uv_se
-                ):
+        for ((u,v), I, P, S_uv, S_se_uv) in edge_records:
 
             S_u, S_v = MI_graph.nodes[u]["S_pos_mean"], MI_graph.nodes[v]["S_pos_mean"]
 
@@ -154,7 +186,7 @@ class MIST:
             neighbors = list(nx.neighbors(self.T, u))
             if len(neighbors) > 0:
                 v = neighbors[0]
-                P = self.T.edges[u,v]["P"]
+                P = dense_probability(self.T.edges[u,v]["P"])
                 axes = self.T.edges[u,v]["axes"]
                 if u != axes[0]:
                     P = P.T
@@ -373,9 +405,9 @@ def joint_distribution(T, u, v):
     def _transfer_matrix(T,u,v):
         axes = T[u][v]["axes"]
         if axes == (u,v):
-            P_uv = T[u][v]["P"]
+            P_uv = dense_probability(T[u][v]["P"])
         elif axes == (v,u):
-            P_uv = T[u][v]["P"].T
+            P_uv = dense_probability(T[u][v]["P"]).T
         else:
             raise Exception(f"Axes specification error, received edges {(u,v)} and got axes {axes}")
         replace_inf_with_zero = lambda x: jnp.where(jnp.isinf(x), 0, x)
@@ -482,9 +514,9 @@ def transfer_matrix(T, u, v, fix_v=None, pad2dim=100):
     # transpose the matrix if needed
     axes = T[u][v]["axes"]
     if axes == (u,v):
-        P_uv = jnp.array(T[u][v]["P"])
+        P_uv = jnp.array(dense_probability(T[u][v]["P"]))
     elif axes == (v,u):
-        P_uv = jnp.array(T[u][v]["P"].T)
+        P_uv = jnp.array(dense_probability(T[u][v]["P"]).T)
     else:
         raise Exception(f"Axes specification error, received edges {(u,v)} and got axes {axes}")
     
@@ -613,7 +645,7 @@ def _set_S_posterior(tree: MIST, u, prior: str="haldane", uncertainty: bool=Fals
 
 
 def _set_I_posterior(tree: MIST, u, v, prior: str="haldane", uncertainty: bool=False):
-    N_uv = tree.N_obs * tree.edges[u,v]["P"]
+    N_uv = tree.N_obs * dense_probability(tree.edges[u,v]["P"])
     p_u = tree.nodes[u]["p"]
     p_v = tree.nodes[v]["p"]
 
