@@ -1,0 +1,90 @@
+{
+  "actual_baseline_imports": 20,
+  "baseline_evaluator_sha256": "04ba068984c68ba782239232b941853ce21af2b48ba60108a89f01317c04f778",
+  "budget": "Small immutable metadata receipt under existing audit allowance",
+  "comparisons": {
+    "lbfgsb_cript_full": {
+      "count": 9,
+      "higher": 9,
+      "lower": 0,
+      "maximum": 2.5167374654828443,
+      "mean": 1.6446414284520774,
+      "minimum": 0.9020513537126806,
+      "sum_residue_frame_gains": 155418.61498872133,
+      "sum_residue_mean_gains": 14.801772856068698,
+      "within_tolerance": 0
+    },
+    "scalar_cript_full": {
+      "count": 9,
+      "higher": 9,
+      "lower": 0,
+      "maximum": 4.692598672892066,
+      "mean": 3.090817047249052,
+      "minimum": 1.1778261822651963,
+      "sum_residue_frame_gains": 292082.2109650354,
+      "sum_residue_mean_gains": 27.817353425241468,
+      "within_tolerance": 0
+    },
+    "scalar_pdz3_full": {
+      "count": 101,
+      "higher": 101,
+      "lower": 0,
+      "maximum": 7.923257524673868,
+      "mean": 1.6687040080579527,
+      "minimum": 0.4548550224967238,
+      "sum_residue_frame_gains": 1769660.600545459,
+      "sum_residue_mean_gains": 168.53910481385324,
+      "within_tolerance": 0
+    }
+  },
+  "evidence_sha256": {
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/PROCESS_EXIT.json": "6aac42102b0f848cd27b1550d0c2492bbb415adce742f709790e24b4bcedc22a",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/SUCCESS.json": "8a9d2cde1c17e22a1f71bf58a84192adbd3affa658df5cd3fc68654422e65dbb",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/command.json": "a873e1cbcaa2c8f4df1173ec4cb99b1b83eeb467f001b8e22b450974b1a8843e",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/protocol.json": "2d60890793c750dfff390c1c13422f1222b6ad05345a16869f8b5b1f86f04362",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/resources.jsonl": "a58da6b8e96f26c80990920efea2b6b42b2b26c221543938f548326ec0fdce13",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/run_solver_selection_v2_20261018.py": "5f5b871429b0f43910e44eded02dfc5b4e041fc053b1d72b4afd6666584472b2",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/solver_selection_saved_models_v2_20261018.py": "e571ecaf76992c2016bbfcedce14543a636c64734c3bab2d6ba8aa0bb756f264",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/stderr.txt": "1ae9f54e31a5063f1fa574e7a085325ce891237d28b2008fff9836cb281ea401",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/stdout.txt": "dafaf71e1b90575a33312cc7cb895dea3146c74bd2b0de6555d0088ceaad545c",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/summary.json": "45bac09ae3541baa4bd0f08629f732bd3dd79e7d4cdc239bfec40b75bc62b4ed",
+    "benchmarks/provenance/solver-selection-saved-models-v2-20261018/time.txt": "7d33fbeb42b31d09fff77a8a935509b6b854a9c01e632b3eb6fd132e17c20351"
+  },
+  "executed_source_file_count": 21,
+  "historical_model_scope": "Historical recorded Newton_jax, scalar_bfgs_stats and actually executed v1 L-BFGS-B fits at seed0/K100. Final delivered composition retains fits through separate accepted equivalence gates; this report is not a new final-source pipeline comparison.",
+  "independent_jax_scipy": {
+    "lbfgsb_cript_full": {
+      "max_abs_jax_scipy_likelihood": 3.552713678800501e-15,
+      "max_abs_jax_scipy_responsibility": 6.250555628639631e-14,
+      "max_abs_recomputed_normalization": 6.661338147750939e-16
+    }
+  },
+  "limitations": [
+    "Single fitted seed per input; no general optimizer optimality claim.",
+    "No completed full-PDZ L-BFGS(-B) model or full-CRIPT clipped-L-BFGS model found; those rankings remain untested.",
+    "Scientific payload hashes are rechecked only for the authorized full-CRIPT L-BFGS-B model; other model identities rely on retained audit/retention metadata.",
+    "Independent reviewer recomputed only small JSON comparisons and checked source/provenance; no model H5/trajectory payload rehash or scientific evaluation repeated.",
+    "Existing environment used; no fresh dependency installation, solver runtime ranking, model global optimum or downstream scientific superiority is established."
+  ],
+  "normalization": "Full normalized product-von-Mises marginal log likelihood, including angle normalizers and normalized mixture weights; mean across all 10500 frames for each independently fitted residue. Sum across residues is not a protein joint likelihood.",
+  "report": "/work/greencenter/s191084/cimist_perf/benchmarks/provenance/solver-selection-saved-models-v2-20261018",
+  "resource_scope": {
+    "affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "guard_gib": 8,
+    "note": "Evaluation overhead only; not solver fitting cost.",
+    "process_seconds": 27.058906592894346,
+    "sampled_peak_process_tree_rss_bytes": 1664446464,
+    "timeout_seconds": 600
+  },
+  "result": "ACCEPTED_SAVED_MODEL_NEWTON_FRESH_LIKELIHOOD_RANKING_ON_RECORDED_FULL_CRIPT_AND_PDZ_INPUTS",
+  "retry_scope": "Only admits a harmless archive root directory named src; previous failed attempt remains retained; no scientific or evaluator change.",
+  "reviewer": "/root/composition_review",
+  "summary_sha256": "45bac09ae3541baa4bd0f08629f732bd3dd79e7d4cdc239bfec40b75bc62b4ed",
+  "utc": "2026-10-18T19:21:30.764187+00:00",
+  "verified_metadata_source_pins": 107
+}
