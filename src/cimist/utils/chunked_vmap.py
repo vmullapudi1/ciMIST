@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import sys
+from numbers import Integral
 
 from functools import partial
 
@@ -291,6 +292,9 @@ def _chunk_vmapped_function(
 
     if chunk_size is None:
         return vmapped_fun
+
+    if isinstance(chunk_size, bool) or not isinstance(chunk_size, Integral) or chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer or None")
 
     if isinstance(argnums, int):
         argnums = (argnums,)

@@ -13,7 +13,7 @@ from functools import partial, wraps
 def positive_batch_size(value):
     size = int(value)
     if size <= 0:
-        raise argparse.ArgumentTypeError("VMM batch size must be a positive integer")
+        raise argparse.ArgumentTypeError("batch size must be a positive integer")
     return size
 
 
@@ -48,24 +48,14 @@ Options are:
     
 Note that of these options, only 'haldane' and 'percs' add the same total number of pseudocounts to each distribution."""
                         )
-    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=100,
-                        help="Default: 100. Maximum residues per EM update batch only. Must be positive; a size at least the residue count uses the full map. Smaller batches can reduce EM temporary memory; initialization and other stages are unchanged.")
-    def positive_pair_batch_size(value):
-        size = int(value)
-        if size <= 0:
-            raise argparse.ArgumentTypeError("PAIR_BATCH_SIZE must be positive")
-        return size
-
-    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_pair_batch_size, default=None,
-                        help="Maximum residue pairs evaluated together; default: all pairs.")
-    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="dense",
-                        help="Sparse probabilities reduce graph memory; changes pickle/API representation.")
-    parser.add_argument("--skip_converged_batches", action="store_true", default=False,
-                        help="Skip wholly converged EM batches. Can reduce CPU work but increase elapsed time; default: off.")
-    args = parser.parse_args(argv)
-    if args.probability_storage == "sparse" and args.PAIR_BATCH_SIZE is None:
-        parser.error("Sparse probability storage requires --PAIR_BATCH_SIZE")
-    return args
+    parser.add_argument("--solver", choices=("newton", "bfgs"), default="newton",
+                        help="Default: newton. Safeguarded scalar Newton solves the bounded M-step; bfgs uses the original clipped objective. Newton can change scientific outputs.")
+    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=None,
+                        help="Maximum residues per EM update batch. Default: all residues, for either solver. Must be positive; smaller batches reduce temporary memory without dropping frames. Initialization and other stages are unchanged.")
+    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=128,
+                        help="Maximum residue pairs evaluated together; default: 128. A value at least the pair count uses the original full map. All pairs and frames are retained.")
+    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="dense", help="Experimental sparse probabilities; changes pickle/API representation")
+    return parser.parse_args(argv)
 
 if __name__ == "__main__":
     # some setup so we don't have to wait for imports to see if the inputs are bad
@@ -78,7 +68,6 @@ t0 = time.time()
 import jax
 jax.config.update('jax_enable_x64', True)
 import cimist as cst
-from cimist.utils.chunked_vmap import apply_chunked
 from cimist.utils.chunked_vmap import vmap_chunked as cvmap
 import dill as pkl
 from jax import jit, vmap, Array
@@ -143,6 +132,8 @@ def main():
     logfile = output_prefix + "logging.txt"
     logging.basicConfig(filename=logfile, level=logging.INFO, filemode='w')
     logging.info("Began pipeline at " + str(today) + ".")
+    logging.info("Solver: %s; EM batch size: %s; pair batch size: %s",
+                 args.solver, args.VMM_BATCH_SIZE, args.PAIR_BATCH_SIZE)
 
     data = load_dataset(args.trajectory, args.topology)
     reference_structure = md.load(args.topology)
@@ -170,19 +161,9 @@ def main():
     )
     
     logging.info("Beginning von Mises mixture models fits with expectation-maximization...")
-    step_if_not_converged = jit(partial(cst.ci.vmm.step_if_not_converged, gtol=1e-3, gmaxiter=500))
-    if args.skip_converged_batches:
-        step_batch = vmap(step_if_not_converged)
-
-        def keep_batch(theta, state):
-            return state
-
-        def advance_batch(theta, state):
-            return jax.lax.cond(jnp.all(state.converged), keep_batch, step_batch, theta, state)
-
-        _advance = apply_chunked(advance_batch, in_axes=(0, 0), chunk_size=args.VMM_BATCH_SIZE)
-    else:
-        _advance = cvmap(step_if_not_converged, in_axes=(0, 0), chunk_size=args.VMM_BATCH_SIZE)
+    step_if_not_converged = jit(partial(cst.ci.vmm.step_if_not_converged,
+                                      gtol=1e-3, gmaxiter=500, solver=args.solver))
+    _advance = cvmap(step_if_not_converged, in_axes=(0, 0), chunk_size=args.VMM_BATCH_SIZE)
     num_residues = len(mixture_state.converged)
     num_converged = jnp.sum(mixture_state.converged)
     for i in range(100):
@@ -199,6 +180,15 @@ def main():
         advance = time_and_message(f"Completed EM iteration {i} for all residues", _advance)
         mixture_state = advance(data.angles, mixture_state)
         num_converged = jnp.sum(mixture_state.converged)
+        if args.solver == "newton":
+            last_step = (mixture_state.n_iter - 1)[:, None]
+            successful = jnp.take_along_axis(mixture_state.successes, last_step, axis=1)[:, 0]
+            if not bool(jnp.all(successful)):
+                failed = jnp.where(~successful.astype(bool))[0].tolist()
+                statuses = jnp.take_along_axis(mixture_state.statuses, last_step, axis=1)[:, 0]
+                message = f"Newton M-step failed for residue indices {failed}; statuses {statuses[jnp.asarray(failed)].tolist()}"
+                logging.error(message)
+                raise RuntimeError(message)
         
                 
         logging.info(f"Reached convergence for {jnp.sum(mixture_state.converged)} out of {len(mixture_state.converged)} residues.")
