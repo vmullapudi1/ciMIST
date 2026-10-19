@@ -5,6 +5,7 @@ Input and output operations for molecular dynamics trajectories and ciMIST objec
 import mdtraj as md
 import os
 import dill as pkl
+from itertools import islice
 from typing import Any, NamedTuple, Optional
 from . import utils
 
@@ -14,6 +15,7 @@ import numpy as np
 import jax.numpy as jnp
 import networkx as nx
 import h5py
+from .sparse_probability import SparseProbability
 
 class DataSet(NamedTuple):
     traj: md.Trajectory
@@ -172,6 +174,52 @@ def to_pickle(obj: Any, path: str) -> None:
     with open(path, "wb") as f:
         pkl.dump(obj, f)
 
+
+SPARSE_PICKLE_FORMAT = "cimist.sparse-probabilities.v1"
+
+
+def dump_sparse_tree(tree, file):
+    """Versioned opt-in representation; retains every tree field, no dense restore."""
+    pkl.dump({"format": SPARSE_PICKLE_FORMAT, "tree": tree}, file)
+
+
+def load_sparse_tree(file):
+    """Read only trusted pickles. This returns sparse edge objects, not arrays."""
+    payload = pkl.load(file)
+    if not isinstance(payload, dict) or payload.get("format") != SPARSE_PICKLE_FORMAT:
+        raise ValueError("Not a supported sparse tree pickle")
+    return payload["tree"]
+
+
+def _write_probabilities(group, graph):
+    values = graph.edges(data="P")
+    if not any(isinstance(value, SparseProbability) for _, _, value in values):
+        # Keep the original dense control's export path.
+        group.create_dataset("P", data=np.stack([value for _, _, value in values]))
+        return
+    first = next(iter(values))[2]
+    shape = first.shape
+    dtype = np.dtype(first.dtype)
+    # At most 8 MiB or 128 edges per explicit dense block, unless one row
+    # itself is larger. HDF5/library buffers are additional to this bound.
+    row_bytes = int(np.prod(shape)) * dtype.itemsize
+    rows = max(1, min(128, (8 * 1024**2) // max(row_bytes, 1)))
+    dataset = group.create_dataset("P", shape=(len(values), *shape), dtype=dtype)
+    iterator = iter(values)
+    offset = 0
+    while records := list(islice(iterator, rows)):
+        block = np.zeros((len(records), *shape), dtype=dtype)
+        for index, (_, _, value) in enumerate(records):
+            if value.shape != shape or np.dtype(value.dtype) != dtype:
+                raise ValueError("Inconsistent edge probability shape/dtype")
+            if isinstance(value, SparseProbability):
+                block[index].reshape(-1)[value.positions] = value.values
+            else:
+                block[index] = np.asarray(value)
+        dataset[offset:offset + len(records)] = block
+        offset += len(records)
+        del block
+
 def save_tree_h5(tree, path, mode="w", attrs_dict={}):
     # Saving, minimal
     with h5py.File(path, mode) as f:
@@ -201,7 +249,7 @@ def save_tree_h5(tree, path, mode="w", attrs_dict={}):
         E_T.create_dataset("name",
                            data=[(u,v) for u,v in tree.T.edges()],
                            dtype=h5py.string_dtype(encoding="utf-8"))
-        E_T.create_dataset("P", data=np.stack([P for (_,_,P) in tree.T.edges(data="P")]))
+        _write_probabilities(E_T, tree.T)
         I_pm = np.array([I for (_,_,I) in tree.T.edges(data="I_pos_mean")])
         I_mle = np.array([I for (_,_,I) in tree.T.edges(data="I")])
         E_T.create_dataset("I_pos_mean", data=I_pm)
@@ -227,7 +275,7 @@ def save_tree_h5(tree, path, mode="w", attrs_dict={}):
         V_T.create_dataset("S_contribution_se", data=np.array([S for (_, S) in tree.nodes(data="S_contribution_se")]))
 
         E_G.create_dataset("name", data=[(u,v) for u,v in tree.MI_graph.edges()])
-        E_G.create_dataset("P", data=np.stack([P for (_,_,P) in tree.MI_graph.edges(data="P")]))
+        _write_probabilities(E_G, tree.MI_graph)
         E_G.create_dataset("I_mle", data=np.array([I for (_,_,I) in tree.MI_graph.edges(data="I")]))
         #E_G.create_dataset("I_pos_mean", data=np.array([I for (_,_,I) in tree.MI_graph.edges(data="I_pos_mean")]))
         #E_G.create_dataset("I_se", data=np.array([s for (_,_,s) in tree.MI_graph.edges(data="I_se")]))
