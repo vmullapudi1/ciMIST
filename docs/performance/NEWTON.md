@@ -44,8 +44,9 @@ limits do not control Newton. Diagnostic counters therefore differ. The
 explicit BFGS fallback uses the original frame-based objective, not the parent
 branch's sufficient-statistics objective; this preserves the measured snapshot.
 
-Defaults change to Newton, full-residue EM and pair batches of 128. Sparse
-storage still requires explicit selection. Run the parent's installation/test
+Defaults are Newton, full-residue EM, pair batches of 128, and sparse
+probability storage. Select `--probability_storage dense` to opt into dense
+arrays/pickles. Run the parent's installation/test
 commands, then:
 
 ```sh

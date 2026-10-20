@@ -45,7 +45,9 @@ smaller files. Full PDZ/ER/mGlu5 compressed pipeline timings have not been run.
 
 `benchmark-source-hashes.json` retains the original measured source hashes.
 `source-hashes.json` identifies the current source; only `src/cimist/io.py`
-and `src/cimist/fit.py` differ from that benchmark inventory. This distinction
+and `src/cimist/fit.py` differ from that benchmark inventory. `fit.py` also
+selects the measured memory configuration by default (sparse storage and
+pair128; EM8 for equivalent, full-residue EM for Newton). This distinction
 preserves the campaign's evidence without claiming it tested the new default.
 The Newton branch's benchmark inventory refers to its own historical Newton
 composition, not the equivalent-output parent's composition.
