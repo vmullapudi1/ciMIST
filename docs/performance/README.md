@@ -6,6 +6,15 @@ EM derivation on PDF pages 34–35), preprocessing, frames, K=100, priors,
 algorithm order and uncertainty estimator. Forest repair implements the same
 residue-deletion replicates (supplement page S6, lines 944–952).
 
+## Benchmark configuration: compression disabled
+
+The benchmarks below were run with HDF5 compression disabled. On this branch,
+select `--hdf5_compression none` for that export setting. Normal runs default
+to lossless gzip level 1 plus shuffle. The measured runs predate that default;
+the retained source manifests identify their exact implementation. Compression's
+full-pipeline overhead is not included in these results and has not been measured.
+See [compression validation](COMPRESSION.md) for exact round-trip checks.
+
 ## Measured complete pipelines
 
 | Input (residues × frames) | Wall seconds, reference → candidate | CPU seconds | Peak RSS GiB |
@@ -44,7 +53,8 @@ python -m pip install -c docs/performance/tested-constraints.txt -e .
 JAX_ENABLE_X64=1 python -m unittest discover -s tests -v
 mkdir -p results
 ci-mist -t TRAJECTORY.xtc -s TOPOLOGY.pdb -o results/run --seed 0 \
-  --VMM_BATCH_SIZE 8 --PAIR_BATCH_SIZE 128 --probability_storage sparse
+  --VMM_BATCH_SIZE 8 --PAIR_BATCH_SIZE 128 --probability_storage sparse \
+  --hdf5_compression none
 ```
 
 Use identical trajectory/topology bytes, frame selection, seed and dependencies
@@ -54,7 +64,10 @@ from saved final parameters, not EM history. Compare all HDF5 and decoded pickle
 fields, align labels, check discrete assignments/ordered edges separately, and
 report absolute/relative errors with unchanged tolerances.
 
-`source-hashes.json` binds every package source file to the measured composition.
+`benchmark-source-hashes.json` preserves the historical measured source inventory.
+`source-hashes.json` pins the current source, including the later compression
+change in `io.py` and CLI routing in `fit.py`; these are not newly benchmarked
+full-pipeline source hashes.
 `evidence/` contains original acceptance receipts, not the raw datasets/results;
 absolute cluster paths in them are provenance and will not resolve on GitHub.
 The complete campaign harness and raw evidence remain in the research workspace.
@@ -69,4 +82,7 @@ Dense remains default. Sparse output uses `cimist.sparse-probabilities.v1`:
 read trusted binary pickles with `cimist.io.load_sparse_tree(stream)` and use
 `SparseProbability.dense_numpy()` when consumers need arrays. Ordinary bare
 pickle consumers need adaptation. HDF5 scientific fields/schema are unchanged;
-export uses bounded uncompressed blocks. Compression was not selected.
+export uses bounded blocks. Nonempty numeric arrays use gzip level 1 plus
+shuffle by default, with row-oriented chunks targeting at most 1 MiB. Scalars,
+empty datasets and strings remain uncompressed. Pass `--hdf5_compression none`
+or `compression=None` to the Python save functions for uncompressed output.

@@ -134,3 +134,12 @@ options:
                         Batch size (in number of trajectory frames) to disatch to ProteinMPNN via jax.vmap. Should be set depending on available memory.
                             DEFAULT: 500.
 ```
+
+
+### HDF5 compression
+
+HDF5 output uses lossless gzip level 1 plus shuffle for nonempty numeric
+arrays by default. Use `--hdf5_compression none` for uncompressed output;
+Python save functions accept `compression=None`. Existing HDF5 readers work
+without changes. See [compression details and validation scope](docs/performance/COMPRESSION.md).
+Performance tables report runs with compression disabled (`--hdf5_compression none`).

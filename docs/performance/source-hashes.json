@@ -1,10 +1,10 @@
 {
   "src/cimist/mist.py": "2b184f316c7d41dd19cf69e7f6e9e79374cdd9df329fb7d83dc23a11da6c38d5",
   "src/cimist/entropy.py": "5f46fe7a16f46cb07737d6c97f123392759cd76e769938ee819b0be247925f8c",
-  "src/cimist/io.py": "f706da593a98adf85617b6c8b14bc05dc1555454406334ad9e25e4a635bdbd81",
+  "src/cimist/io.py": "44fe0ac31eadc2bd6bf8a184c6abe7c97f9de33ec6e2baf27869b29f03a78e95",
   "src/cimist/sparse_probability.py": "c0d1e35e1462ecd000f6fb2bfee9ce36f5266bf94c88383bbc93f2d0c191be81",
   "src/cimist/__init__.py": "0b6503ed4e0cb0b8fbf48bb4d40a6239eefa71b0bdba7fc254bfae177f5943de",
-  "src/cimist/fit.py": "f111533c1900e91f9745fd50018777056ae9cc53701cdbe9ffea6ceada143527",
+  "src/cimist/fit.py": "2c28e7e4e4259b26a3da35e2e7d18e087f9d192ecaef787d2ecd033d18391315",
   "src/cimist/mpnn.py": "b4de41d317aa9eca08e41066ce83293e2dccaabbe5374612d913198f92653f19",
   "src/cimist/utils/__init__.py": "77f2b28dfc926cc3c3da2846a28c1510027e4485246e9ffddcdb2d3ac577d2fa",
   "src/cimist/utils/trajectory.py": "4125cc72be61a71f0c251010b1ab9053019b8966a42aa8f99aaac98edf37d673",

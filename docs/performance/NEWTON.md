@@ -1,8 +1,15 @@
 # Safeguarded Newton: improved fits, different outputs
 
-This branch is stacked on `pr/equivalent-performance`. The source hash manifest
-now describes the final Newton composition; the inherited equivalence report
+This branch is stacked on `pr/equivalent-performance`. `benchmark-source-hashes.json`
+describes the measured Newton composition; `source-hashes.json` includes the
+later compression default. The inherited equivalence report
 and its receipts describe the parent branch, not Newton versus original BFGS.
+
+**Export update:** HDF5 now defaults to lossless gzip level 1 plus shuffle.
+The measurements below were run with compression disabled (select
+`--hdf5_compression none` for that setting). They predate the gzip default
+and exclude its unmeasured full-pipeline overhead. See
+[compression scope](COMPRESSION.md).
 
 On full mGlu5 (1,608 residues, 3,236 unchanged frames, seed 0, K=100), the final
 composition used 7,055.840 wall seconds, 14,676.622 CPU seconds and 38.8815 GiB.

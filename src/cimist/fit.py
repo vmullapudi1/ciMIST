@@ -55,6 +55,8 @@ Note that of these options, only 'haldane' and 'percs' add the same total number
     parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=128,
                         help="Maximum residue pairs evaluated together; default: 128. A value at least the pair count uses the original full map. All pairs and frames are retained.")
     parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="dense", help="Experimental sparse probabilities; changes pickle/API representation")
+    parser.add_argument("--hdf5_compression", choices=("gzip", "none"), default="gzip",
+                        help="HDF5 numeric arrays: lossless gzip level 1 + shuffle (default), or none.")
     return parser.parse_args(argv)
 
 if __name__ == "__main__":
@@ -220,7 +222,8 @@ def main():
         else:
             pkl.dump(tree, f)
 
-    cst.io.save_tree_h5(tree, fname)
+    cst.io.save_tree_h5(tree, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
 
     import shutil
     ANALYSIS_PATH = cst.__path__[0] + os.sep + "templates/analysis_template.ipynb"
@@ -230,8 +233,10 @@ def main():
     
 
     cst.pymol.tree_cartoon(tree, reference_structure, output_prefix + "pymol" + os.sep)
-    cst.io.save_coarse_graining_h5(states, fname)
-    cst.io.save_VMM_h5(mixture_state, fname)
+    cst.io.save_coarse_graining_h5(states, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
+    cst.io.save_VMM_h5(mixture_state, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
     
 
     return None
