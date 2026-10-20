@@ -1,5 +1,11 @@
 # Safeguarded Newton: improved fits, different outputs
 
+See the [three-system comparison](newton-comparison/README.md) for full-trajectory
+PDZ, ERα and mGlu5 tables comparing mainline, sparse BFGS and Newton, plus tree
+figures, EM diagnostics and a [draft PR body](newton-comparison/PR_BODY.md).
+The new full ERα run uses commit `588f0c7` and explicitly disables compression;
+the historical PDZ/mGlu5 timings below predate the compression default.
+
 This branch is stacked on `pr/equivalent-performance`. `benchmark-source-hashes.json`
 describes the measured Newton composition; `source-hashes.json` includes the
 later compression default. The inherited equivalence report
@@ -11,6 +17,8 @@ The measurements below were run with compression disabled (select
 and exclude its unmeasured full-pipeline overhead. See
 [compression scope](COMPRESSION.md).
 
+**Unmodified mainline ran out of memory on mGlu5 and has no completed result.**
+Its completed BFGS reference below includes EM16/pair128 memory batching.
 On full mGlu5 (1,608 residues, 3,236 unchanged frames, seed 0, K=100), the final
 composition used 7,055.840 wall seconds, 14,676.622 CPU seconds and 38.8815 GiB.
 The batched original BFGS reference used 62,821.722 seconds, 388,136.236 CPU

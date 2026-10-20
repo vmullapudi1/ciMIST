@@ -1,0 +1,10 @@
+{
+  "outer_em_converged": true,
+  "recorded_m_steps": 6216,
+  "failed_m_steps": 2250,
+  "solver_status_counts": {
+    "0": 3966,
+    "5": 2250
+  },
+  "scope": "Mainline reproducibility reference; outer convergence alone does not certify successful inner optimization or paper fidelity"
+}

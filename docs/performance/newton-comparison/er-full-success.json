@@ -1,0 +1,34 @@
+{
+  "instrumentation_equivalence_checked": false,
+  "case": {
+    "id": "er_dimer_full",
+    "topology": "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/topologies/ER_alpha_dimer/ER_alpha_EST.pdb",
+    "trajectories": [
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_1.xtc",
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_2.xtc",
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_3.xtc",
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_4.xtc",
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_5.xtc",
+      "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/trajectories/ER_alpha_dimer/ER_alpha_EST/traj_6.xtc"
+    ],
+    "frames": "full",
+    "pdb_ca_count": 500,
+    "documented_interval_ps": 500,
+    "sampling_documentation": "/project/greencenter/Lin_lab/shared/kaitlin/jiafeng_trajectories/README.md"
+  },
+  "baseline_commit": "502c65f04c72fdec7b618a23c1136c66af9333d2",
+  "scope": "Current Newton PR full ERalpha execution and checked lossless retention; scientific comparison is separate",
+  "source_commit": "588f0c7",
+  "hdf5_compression": "none",
+  "helper_sha256": {
+    "worker.py": "889a7bad4f250435443ead4a7e105918c9205cbaa2ec0f7cad2eb756fba6e08e",
+    "mglu_sparse_instrument.py": "c3d5f657f93797ee1f06326885a99367ba0ddf49179330ae2f1cf82bf33ecad4",
+    "retain_outputs.py": "ed4ef38c1f88e8a9b55e0a0616db360dcb724672bd062f31bdda946f3ad46b11",
+    "row_slab_repack.py": "4a9488ceaa904bcfaa6147b2919ae9737e80c39ca0bcedf42dff5ddc520fca0e",
+    "exact_h5_slabs.py": "6500cce06490a13f22b1103b9c83119a50dae33fdf808b8e54eda2119830bea9",
+    "exact_h5.py": "7bd792da41e97d808974326d8b39ddeefcdaceeadaa903024c9392472518c8ac",
+    "validate_batch16.py": "e1105c338bb979ba29c189f291359f600db0a9b1e878123ccd854d62f19c8a2b",
+    "matrix.json": "690c314ec963ac735084f2363f5e724936b20ecea43a6d90f54e2a1d43b91e3a",
+    "output_experiment.py": "de7bae933fe574bf302ed5b341c8d86939c4db44a3c5af6270527b81985e0528"
+  }
+}
