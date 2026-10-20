@@ -48,18 +48,18 @@ Options are:
     
 Note that of these options, only 'haldane' and 'percs' add the same total number of pseudocounts to each distribution."""
                         )
-    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=100,
-                        help="Default: 100. Maximum residues per EM update batch only. Must be positive; a size at least the residue count uses the full map. Smaller batches can reduce EM temporary memory; initialization and other stages are unchanged.")
+    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=8,
+                        help="Default: 8. Maximum residues per EM update batch only. Must be positive; a size at least the residue count uses the full map. Smaller batches can reduce EM temporary memory; initialization and other stages are unchanged.")
     def positive_pair_batch_size(value):
         size = int(value)
         if size <= 0:
             raise argparse.ArgumentTypeError("PAIR_BATCH_SIZE must be positive")
         return size
 
-    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_pair_batch_size, default=None,
-                        help="Maximum residue pairs evaluated together; default: all pairs.")
-    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="dense",
-                        help="Sparse probabilities reduce graph memory; changes pickle/API representation.")
+    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_pair_batch_size, default=128,
+                        help="Maximum residue pairs evaluated together; default: 128. Set at least the pair count to evaluate all pairs together.")
+    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="sparse",
+                        help="Default: sparse, exact probabilities with reduced graph memory. Select dense for legacy probability arrays/pickles.")
     parser.add_argument("--skip_converged_batches", action="store_true", default=False,
                         help="Skip wholly converged EM batches. Can reduce CPU work but increase elapsed time; default: off.")
     parser.add_argument("--hdf5_compression", choices=("gzip", "none"), default="gzip",

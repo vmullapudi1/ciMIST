@@ -66,7 +66,7 @@ report absolute/relative errors with unchanged tolerances.
 
 `benchmark-source-hashes.json` preserves the historical measured source inventory.
 `source-hashes.json` pins the current source, including the later compression
-change in `io.py` and CLI routing in `fit.py`; these are not newly benchmarked
+change in `io.py` and CLI routing/defaults in `fit.py`; these are not newly benchmarked
 full-pipeline source hashes.
 `evidence/` contains original acceptance receipts, not the raw datasets/results;
 absolute cluster paths in them are provenance and will not resolve on GitHub.
@@ -78,7 +78,8 @@ exercise algorithms and source identity; they do not rerun the large campaign.
 
 ## Output compatibility
 
-Dense remains default. Sparse output uses `cimist.sparse-probabilities.v1`:
+Sparse is now the CLI default; select `--probability_storage dense` for legacy
+dense probability arrays and pickle output. Sparse output uses `cimist.sparse-probabilities.v1`:
 read trusted binary pickles with `cimist.io.load_sparse_tree(stream)` and use
 `SparseProbability.dense_numpy()` when consumers need arrays. Ordinary bare
 pickle consumers need adaptation. HDF5 scientific fields/schema are unchanged;
@@ -86,3 +87,35 @@ export uses bounded blocks. Nonempty numeric arrays use gzip level 1 plus
 shuffle by default, with row-oriented chunks targeting at most 1 MiB. Scalars,
 empty datasets and strings remain uncompressed. Pass `--hdf5_compression none`
 or `compression=None` to the Python save functions for uncompressed output.
+
+
+## Default CLI configuration
+
+Normal `ci-mist` runs use **sparse probability storage**, **128-pair batches**,
+**EM over 8 residues per batch**, and **lossless gzip-1/shuffle HDF5 output**.
+These are this branch's measured memory/solver settings; benchmark export used
+compression disabled. To select that export setting, add
+`--hdf5_compression none`.
+
+```sh
+mkdir -p results
+ci-mist -t TRAJECTORY.xtc -s TOPOLOGY.pdb -o results/run --seed 0
+```
+
+Use `--probability_storage dense` for legacy dense arrays/pickles. Batch sizes
+remain configurable with `--VMM_BATCH_SIZE` and `--PAIR_BATCH_SIZE`; setting a
+size at least as large as the corresponding residue/pair count processes it
+in one batch. Larger batches and dense storage can increase peak memory; their
+performance depends on the input and hardware. Defaults select the measured
+configuration, not a universal claim that every alternative is slower.
+
+The sparse pickle format is now the default CLI output: use
+`cimist.io.load_sparse_tree(stream)` rather than assuming a plain tree pickle.
+HDF5 readers require no changes. Python `MIST.from_residue_states` retains its
+existing API defaults; request `pair_batch_size=128, probability_storage="sparse"`
+when calling it directly to select the CLI's memory configuration.
+
+After the CLI-default update, all 10 tests passed in 3.124 seconds on
+NucleusA089 with the recorded environment and CPU/thread limits described in
+[compression validation](COMPRESSION.md). The added tests exercise defaults,
+explicit overrides, sparse/dense scientific equality and sparse pickle loading.

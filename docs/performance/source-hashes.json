@@ -5,7 +5,7 @@
   "src/cimist/ci/mpnn.py": "7176c894ead5aaafd45abedf0ea78d3c52fefad114637c363356b7cda600e3bf",
   "src/cimist/ci/vmm.py": "c4c1cb8af662c29f388ec3b314b8994b0e948947d1981de477d724d71fb5c598",
   "src/cimist/entropy.py": "5f46fe7a16f46cb07737d6c97f123392759cd76e769938ee819b0be247925f8c",
-  "src/cimist/fit.py": "906d74e73503c06cd78d7f96731f93647045086f3e8a3dfa264e90366d8c34bd",
+  "src/cimist/fit.py": "1ca0cbe51301c5d1bf1b2d41af6100dd6e5a0cfc36c90e57e1031df2cebdf2ed",
   "src/cimist/io.py": "44fe0ac31eadc2bd6bf8a184c6abe7c97f9de33ec6e2baf27869b29f03a78e95",
   "src/cimist/mist.py": "0f8a1330d68f465bd743b11229191f8586613c1d3ce919213c443197140e8192",
   "src/cimist/mpnn.py": "b4de41d317aa9eca08e41066ce83293e2dccaabbe5374612d913198f92653f19",
