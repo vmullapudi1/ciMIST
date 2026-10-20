@@ -14,7 +14,7 @@ from cimist.sparse_probability import SparseProbability
 from cimist.io import _write_probabilities
 
 class PerformanceContract(unittest.TestCase):
-    def test_measured_source_identity(self):
+    def test_current_source_identity(self):
         root = Path(__file__).resolve().parents[1]
         hashes = json.loads((root / "docs/performance/source-hashes.json").read_text())
         for name, expected in hashes.items():

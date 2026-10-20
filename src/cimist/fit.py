@@ -62,6 +62,8 @@ Note that of these options, only 'haldane' and 'percs' add the same total number
                         help="Sparse probabilities reduce graph memory; changes pickle/API representation.")
     parser.add_argument("--skip_converged_batches", action="store_true", default=False,
                         help="Skip wholly converged EM batches. Can reduce CPU work but increase elapsed time; default: off.")
+    parser.add_argument("--hdf5_compression", choices=("gzip", "none"), default="gzip",
+                        help="HDF5 numeric arrays: lossless gzip level 1 + shuffle (default), or none.")
     args = parser.parse_args(argv)
     if args.probability_storage == "sparse" and args.PAIR_BATCH_SIZE is None:
         parser.error("Sparse probability storage requires --PAIR_BATCH_SIZE")
@@ -230,7 +232,8 @@ def main():
         else:
             pkl.dump(tree, f)
 
-    cst.io.save_tree_h5(tree, fname)
+    cst.io.save_tree_h5(tree, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
 
     import shutil
     ANALYSIS_PATH = cst.__path__[0] + os.sep + "templates/analysis_template.ipynb"
@@ -240,8 +243,10 @@ def main():
     
 
     cst.pymol.tree_cartoon(tree, reference_structure, output_prefix + "pymol" + os.sep)
-    cst.io.save_coarse_graining_h5(states, fname)
-    cst.io.save_VMM_h5(mixture_state, fname)
+    cst.io.save_coarse_graining_h5(states, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
+    cst.io.save_VMM_h5(mixture_state, fname,
+        compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
     
 
     return None
