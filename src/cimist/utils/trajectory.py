@@ -10,23 +10,56 @@ from jax import Array, vmap, pmap
 from jax.lax import scan
 import jax.numpy as jnp
 import mdtraj as md
+import numpy as np
 
-def traj_to_internal(traj: md.Trajectory) -> dict:
-    apo_scnet, apo_seq = traj_to_scnet(traj)
-    apo_internal = scnet_cartesian_to_internal(apo_scnet, apo_seq)
-    return apo_internal
+def traj_to_internal(traj: md.Trajectory, residue_indices=None,
+                     frame_batch_size=64, residue_batch_size=128) -> dict:
+    """Extract physical internal coordinates using the original topology.
+
+    Selection chooses residue centers without removing their covalent context.
+    Scaffold arrays retain their frame axes; feature_mask and residue_records
+    are static. Atom-presence cloud_mask remains distinct from feature_mask.
+    """
+    references, feature_mask, records = nerfax.parser.protein_feature_references(
+        traj.topology, residue_indices)
+    bonds, angles = nerfax.parser.get_data_masks(
+        traj.xyz, references, traj.unitcell_vectors, frame_batch_size, residue_batch_size)
+    canonical = nerfax.parser.IUPACData.protein_letters_3to1
+    seq = "".join(canonical[record["name"].title()] for record in records)
+    point_ref, cloud_mask = nerfax.parser.get_point_ref_and_cloud_mask(seq)
+    # Folding assumes one complete peptide chain in row order, without caps.
+    n, ca, c = references[:, 0, :3].T
+    previous_c = np.r_[-1, c[:-1]]
+    previous_ca = np.r_[-1, ca[:-1]]
+    next_n = np.r_[n[1:], -1]
+    expected = np.stack((np.stack((n, ca, c, next_n), axis=-1),
+                         np.stack((previous_ca, previous_c, n, ca), axis=-1),
+                         np.stack((previous_c, n, ca, c), axis=-1)), axis=1)
+    reconstructable = (len(records) >= 2
+                       and len({record["chain_index"] for record in records}) == 1
+                       and np.array_equal(references[:, :3], expected))
+    return dict(angles_mask=angles, bond_mask=bonds,
+                cloud_mask=np.broadcast_to(cloud_mask, (len(traj),) + cloud_mask.shape),
+                point_ref_mask=np.broadcast_to(point_ref[:3], (len(traj),) + point_ref[:3].shape),
+                feature_mask=feature_mask, residue_records=records,
+                reconstruction_supported=reconstructable)
 
 def internal_to_traj(internal_coordinates: dict,
                      reference_traj: md.Trajectory,
                      superpose: bool = True,
                      mean_bond_length: bool = True
                      ) -> md.Trajectory:
+    records = internal_coordinates.get("residue_records")
+    if records is not None and records != nerfax.parser.residue_records(reference_traj.topology):
+        raise ValueError("Reconstruction requires a reference with the same complete residue mapping")
     _, _restrict, _to_list = nerfax.parser.get_scnet_loader_fns(reference_traj)
     cartesian = internal_to_cartesian_scnet(internal_coordinates,
                                             _to_list,
                                             mean_bond_length=mean_bond_length
                                             )
     traj = scnet_cartesian_to_traj(cartesian, reference_traj)
+    # Folding chooses an arbitrary rigid pose, independent of the input cell.
+    traj.unitcell_vectors = None
     if superpose:
         traj.superpose(_restrict(reference_traj))
     return traj
@@ -40,13 +73,13 @@ def internal_to_cartesian_scnet(internal_coordinates: dict,
                      mean_bond_length: Optional[bool] = True
                      ) -> Array:
     
-    # switch to nerfax format
-    internal_coordinates = vmap(convert_scnet_to_natural)(internal_coordinates)
-    # these are always the same
-    cloud_mask = internal_coordinates["cloud_mask"][0]
-    point_ref_mask = internal_coordinates["point_ref_mask"][0]
-    angles_mask = internal_coordinates["angles_mask"]
-    bond_mask = internal_coordinates["bond_mask"]
+    if not internal_coordinates.get("reconstruction_supported", True):
+        raise ValueError("Internal-coordinate reconstruction requires one complete connected chain with at least two residues and no external covalent context")
+    # Static feature/identity metadata must not be passed through vmap.
+    cloud_mask = jnp.asarray(internal_coordinates["cloud_mask"][0])
+    point_ref_mask = jnp.asarray(internal_coordinates["point_ref_mask"][0])
+    angles_mask = vmap(convert_scnet_to_natural)(internal_coordinates["angles_mask"])
+    bond_mask = jnp.asarray(internal_coordinates["bond_mask"])
     if mean_bond_length:
         bond_length = bond_mask.mean(axis=0)
         cartesian = vmap(lambda A: 
@@ -70,19 +103,26 @@ def scnet_cartesian_to_traj(cartesian: Array,
     # coordinates, properly formatted for mdtraj
     xyz = vmap(_to_list)(cartesian)
     # only need the first frame for topology
-    topology = _restrict(reference_traj[0]).topology 
-    return md.Trajectory(xyz, topology)
+    topology = _restrict(reference_traj.slice(0, copy=False)).topology
+    traj = md.Trajectory(xyz, topology)
+    if len(traj) == len(reference_traj):
+        traj.time = reference_traj.time.copy()
+        traj.unitcell_vectors = reference_traj.unitcell_vectors
+    return traj
 
 def flatten_masks(internal: dict) -> Tuple[Array, Array]:
-    concat = lambda x,y: jnp.concatenate((x,y), axis=-1)
-
-    angles = concat(internal["angles_mask"][:,0,:,:], internal["angles_mask"][:,1,:,:])
-    angles = jnp.swapaxes(angles, 0, 1)
-
-    cloud_mask = concat(internal["cloud_mask"][0], internal["cloud_mask"][0])
-    # angles dimensions are residue, time, feature
-    # cloud dimensionare are residue, feature
-    return angles, cloud_mask
+    """Return residue/frame/features and the physical statistical mask."""
+    values = internal["angles_mask"]
+    # NumPy scaffolds share the feature-contiguous backing allocation.
+    if isinstance(values, np.ndarray):
+        angles = values.transpose(2, 0, 1, 3).reshape(values.shape[2], values.shape[0], 28)
+    else:
+        angles = jnp.concatenate((values[:, 0], values[:, 1]), axis=-1).swapaxes(0, 1)
+    if "feature_mask" in internal:
+        mask = internal["feature_mask"]
+    else:
+        mask = jnp.concatenate((internal["cloud_mask"][0], internal["cloud_mask"][0]), axis=-1)
+    return jnp.asarray(angles), jnp.asarray(mask)
 
 def traj_to_scnet(traj: md.Trajectory) -> Tuple[Array, str]:
     """
@@ -99,39 +139,24 @@ def traj_to_scnet(traj: md.Trajectory) -> Tuple[Array, str]:
     coords : jax array of dimensions T x L x 14 x 3
         cartesian coordinates.
     seq : str
-        the protein sequence
+        the concatenated protein sequence; retain the topology for chain boundaries
 
     """
     _parse_coords, _, _ = nerfax.parser.get_scnet_loader_fns(traj)
-    if len(traj) == 1:
-        coords = _parse_coords(traj.xyz[0])
-    else:
-        coords = vmap(_parse_coords)(traj.xyz)
-    seq = traj.topology.to_fasta()[0]
+    coords = vmap(_parse_coords)(traj.xyz)
+    seq = nerfax.parser.protein_sequence(traj.topology)
     return coords, seq
     
 #@partial(jit, static_argnames=("seq",))
 def scnet_cartesian_to_internal(scnet_coords: Array, seq: str) -> dict:
+    """Convert (T, R, 14, 3) Angstrom coordinates for one connected chain.
+
+    Sequence alone cannot describe chain boundaries, covalent gaps, caps, or
+    periodic imaging. Use traj_to_internal with the original topology for those.
     """
-    
-
-    Parameters
-    ----------
-    scnet_coords :  jax array of dimensions T x L x 14 x 3
-        cartesian coordinates.
-    seq : str
-        the protein sequence.
-
-    Returns
-    -------
-    internal_coords : dict of arrays
-        keys are ('angles_mask', 'bond_mask', 'cloud_mask', 'point_ref_mask').
-        shapes of arrays are T x 2 x L x 14
-
-    """
-    make_scaffolds = vmap(nerfax.parser.make_scaffolds, in_axes=(0,None))
-    internal_coords = make_scaffolds(scnet_coords, seq)
-    return vmap(convert_natural_to_scnet)(internal_coords)
+    internal = nerfax.parser.make_scaffolds(scnet_coords, seq)
+    internal["angles_mask"] = vmap(convert_natural_to_scnet)(internal["angles_mask"])
+    return internal
 
 # -----------------------------------------------------------------------------
 #adapted from 

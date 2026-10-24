@@ -11,15 +11,15 @@ import numpy as np
 
 from cimist.fit import parse_args
 from cimist.mist import MIST
-from cimist.io import dump_sparse_tree, load_sparse_tree
+from cimist.io import save_tree_h5, load_h5_tree
 from cimist.sparse_probability import SparseProbability, dense_probability
 
 
 class CLIDefaults(unittest.TestCase):
     def test_benchmarked_defaults_and_overrides(self):
         args = parse_args([])
-        self.assertEqual(args.VMM_BATCH_SIZE, 32)
-        self.assertEqual(args.PAIR_BATCH_SIZE, 128)
+        self.assertEqual(args.VMM_BATCH_SIZE, None)
+        self.assertEqual(args.PAIR_BATCH_SIZE, 2048)
         self.assertEqual(args.probability_storage, "sparse")
         self.assertEqual(args.hdf5_compression, "gzip")
         override = parse_args(["--VMM_BATCH_SIZE", "100", "--PAIR_BATCH_SIZE", "999",
@@ -28,7 +28,7 @@ class CLIDefaults(unittest.TestCase):
                           override.probability_storage, override.hdf5_compression),
                          (100, 999, "dense", "none"))
 
-    def test_default_storage_preserves_dense_results_and_pickle(self):
+    def test_default_storage_preserves_dense_results_and_hdf5(self):
         states = SimpleNamespace(states_traj=jnp.array([[0, 0, 1, 1, 0, 1, 0, 1],
                                                         [0, 1, 0, 1, 0, 1, 1, 0],
                                                         [1, 1, 0, 0, 1, 0, 1, 0]]),
@@ -48,13 +48,17 @@ class CLIDefaults(unittest.TestCase):
             self.assertIsInstance(actual, SparseProbability)
             np.testing.assert_array_equal(dense_probability(actual), dense.MI_graph.edges[edge]["P"])
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "tree.pkl"
-            with path.open("wb") as f:
-                dump_sparse_tree(sparse, f)
-            with path.open("rb") as f:
-                restored = load_sparse_tree(f)
-            self.assertEqual(list(restored.T.edges), list(sparse.T.edges))
-            self.assertEqual(float(restored.entropy()), float(sparse.entropy()))
+            for name, tree in (("sparse", sparse), ("dense", dense)):
+                path = Path(folder) / f"{name}.h5"
+                save_tree_h5(tree, path)
+                restored = load_h5_tree(path)
+                self.assertEqual(list(restored.T.edges), list(tree.T.edges))
+                self.assertEqual(float(restored.entropy()), float(tree.entropy()))
+                for edge in tree.MI_graph.edges:
+                    actual = restored.MI_graph.edges[edge]["P"]
+                    self.assertIsInstance(actual, SparseProbability)
+                    np.testing.assert_array_equal(dense_probability(actual),
+                                                  dense_probability(tree.MI_graph.edges[edge]["P"]))
 
 
 if __name__ == "__main__":

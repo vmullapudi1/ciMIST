@@ -13,6 +13,7 @@ import numpy as np
 
 from cimist import fit
 from cimist.ci import vmm
+from cimist.utils.chunked_vmap import vmap_chunked
 
 
 class ReachedClustering(Exception):
@@ -50,32 +51,29 @@ class EMFinalization(unittest.TestCase):
             return last_state
 
         advance_spy = Mock(side_effect=advance)
-        refresh_spy = Mock(wraps=jax.vmap(vmm.update_r))
+        refresh_spy = Mock(wraps=vmap_chunked(vmm.update_r, in_axes=(0, 0),
+                                             chunk_size=1))
 
         def map_stage(func, **kwargs):
+            if func is vmm.update_r:
+                return refresh_spy
             self.assertIs(func.func, vmm.step_if_not_converged)
             self.assertEqual(func.keywords,
                              dict(gtol=1e-3, gmaxiter=500, solver=solver))
             return advance_spy
 
-        def map_residues(func):
-            if func is vmm.update_r:
-                return refresh_spy
-            self.assertIs(func, vmm.init_random_mixture_state)
-            return Mock(return_value=initial)
-
         clustering = Mock(side_effect=ReachedClustering)
         data = SimpleNamespace(
             traj=Mock(), angles=angles, cloud_mask=initial.mask,
-            residues=["GLY1_A", "GLY2_A"])
+            residues=["GLY1_A", "GLY2_A"],
+            residue_records=[dict(chain_index=0), dict(chain_index=0)])
         data.traj.__len__ = Mock(return_value=7)
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             args = fit.parse_args(["-o", str(Path(folder) / "run"),
                                    "--solver", solver, "--VMM_BATCH_SIZE", "1"])
             stack.enter_context(patch.object(fit, "parse_args", return_value=args))
             stack.enter_context(patch.object(fit, "load_dataset", return_value=data))
-            stack.enter_context(patch.object(fit.md, "load", return_value=Mock()))
-            stack.enter_context(patch.object(fit, "vmap", side_effect=map_residues))
+            stack.enter_context(patch.object(fit, "vmap", return_value=Mock(return_value=initial)))
             stack.enter_context(patch.object(fit, "combine_mixture_fit_batches", return_value=initial))
             stack.enter_context(patch.object(fit, "jit", side_effect=lambda func: func))
             stack.enter_context(patch.object(fit, "cvmap", side_effect=map_stage))

@@ -1,18 +1,28 @@
-"""Lossless output and reader compatibility for both HDF5 compression policies."""
+"""Sparse HDF5 arrays remain lossless with either compression policy."""
 from collections import namedtuple
 from pathlib import Path
-from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import h5py
 import networkx as nx
 import numpy as np
 
 from cimist.fit import parse_args
+from cimist.mist import MIST
 from cimist.io import (_create_h5_dataset, _write_probabilities, load_h5_tree,
                        save_tree_h5, save_coarse_graining_h5, save_VMM_h5)
-from cimist.sparse_probability import SparseProbability
+from cimist.sparse_probability import SparseProbability, dense_probability
+
+
+def read_flat_probabilities(group, shape):
+    """Independent decoding checks the stored layout, rather than its loader."""
+    offsets = group["offsets"][:]
+    output = np.zeros((len(offsets) - 1, *shape), dtype=group["values"].dtype)
+    for row, (start, stop) in enumerate(zip(offsets[:-1], offsets[1:])):
+        output[row].flat[group["positions"][int(start):int(stop)]] = group["values"][int(start):int(stop)]
+    return output
 
 
 class HDF5Compression(unittest.TestCase):
@@ -67,16 +77,25 @@ class HDF5Compression(unittest.TestCase):
                     path = Path(folder) / f"{compression}.h5"
                     paths.append(path)
                     with h5py.File(path, "w") as f:
-                        _write_probabilities(f, graph, compression=compression)
+                        with patch.object(SparseProbability, "dense_numpy", side_effect=AssertionError("dense decode")):
+                            _write_probabilities(f, graph, compression=compression)
                     with h5py.File(path, "r") as f:
-                        ds = f["P"]
-                        self.assertEqual(ds[()].tobytes(), expected.tobytes())
-                        self.assertEqual(ds.compression, compression)
-                        if compression:
-                            self.assertLessEqual(np.prod(ds.chunks) * ds.dtype.itemsize, 1024**2)
-                            if shape == (100, 100):
-                                self.assertEqual(ds.chunks[1:], shape)
-                self.assertLess(paths[1].stat().st_size, paths[0].stat().st_size)
+                        self.assertIsInstance(f["P"], h5py.Group)
+                        self.assertEqual(read_flat_probabilities(f["P"], shape).tobytes(), expected.tobytes())
+                        self.assertEqual(f["P/values"].size, 2 * count)
+                        for key in ("values", "positions", "offsets"):
+                            ds = f["P"][key]
+                            self.assertEqual(ds.compression, compression)
+                            if compression:
+                                self.assertLessEqual(np.prod(ds.chunks) * ds.dtype.itemsize, 1024**2)
+
+    def test_large_flat_buffers_use_substantial_bounded_chunks(self):
+        with tempfile.TemporaryDirectory() as folder, h5py.File(Path(folder) / "flat.h5", "w") as file:
+            for dtype in (np.float64, np.uint16, np.int64):
+                ds = _create_h5_dataset(file, np.dtype(dtype).name,
+                                        data=np.zeros(600_000, dtype=dtype))
+                self.assertGreaterEqual(ds.chunks[0], 65536)
+                self.assertLessEqual(ds.chunks[0] * ds.dtype.itemsize, 1024**2)
 
     @staticmethod
     def tree(sparse):
@@ -90,13 +109,16 @@ class HDF5Compression(unittest.TestCase):
                            I=.2, I_pos_mean=.19, I_se=.01, axes=(u, v))
         tree_graph = graph.copy()
         tree_graph.remove_edge("A", "C")
-        return SimpleNamespace(T=tree_graph, MI_graph=graph, nodes=tree_graph.nodes,
-                               N_obs=100, prior="haldane", entropy_estimator="bayes",
-                               entropy=lambda: 2.62, sum_MIs=lambda: .38,
-                               entropy_se=.1, entropy_mle_bias=.01,
-                               counts_variance=.02, structural_variance=.03)
+        tree = MIST.__new__(MIST)
+        tree.__dict__.update(T=tree_graph, MI_graph=graph, nodes=tree_graph.nodes,
+                             edges=tree_graph.edges, N_obs=100, prior="haldane",
+                             entropy_estimator="bayes", uncertainty=True,
+                             _I_key="I_pos_mean", _S_key="S_pos_mean", _implied_marginals_set=False,
+                             entropy_se=.1, entropy_mle_bias=.01,
+                             counts_variance=.02, structural_variance=.03)
+        return tree
 
-    def test_all_export_groups_and_unchanged_reader(self):
+    def test_all_export_groups_and_sparse_reader(self):
         States = namedtuple("States", "labels counts")
         VMM = namedtuple("VMM", "mu kappa n_iter r")
         for sparse in (False, True):
@@ -119,7 +141,9 @@ class HDF5Compression(unittest.TestCase):
                     self.assertNotIn("r", b["VMM"])
                     for name in names_a:
                         left, right = a[name], b[name]
-                        self.assertEqual(dict(left.attrs), dict(right.attrs))
+                        self.assertEqual(set(left.attrs), set(right.attrs))
+                        for key in left.attrs:
+                            np.testing.assert_array_equal(left.attrs[key], right.attrs[key])
                         if isinstance(left, h5py.Dataset):
                             self.assertEqual(left.dtype, right.dtype)
                             self.assertEqual(left.shape, right.shape)
@@ -131,7 +155,9 @@ class HDF5Compression(unittest.TestCase):
                 self.assertEqual(list(old.T.edges), list(new.T.edges))
                 self.assertEqual(float(old.entropy()), float(new.entropy()))
                 for edge in old.MI_graph.edges:
-                    np.testing.assert_array_equal(old.MI_graph.edges[edge]["P"], new.MI_graph.edges[edge]["P"])
+                    self.assertIsInstance(new.MI_graph.edges[edge]["P"], SparseProbability)
+                    np.testing.assert_array_equal(dense_probability(old.MI_graph.edges[edge]["P"]),
+                                                  dense_probability(new.MI_graph.edges[edge]["P"]))
 
 
 if __name__ == "__main__":

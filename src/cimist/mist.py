@@ -17,7 +17,7 @@ import cmocean as cmo
 import mdtraj as md
 
 
-from itertools import combinations
+from itertools import combinations, islice
 from functools import reduce
 from typing import List, Optional, NamedTuple, Union
 
@@ -73,14 +73,9 @@ class MIST:
         counts_array_size = matrix_size**2
         
         def pairwise_interaction(s1: Array, s2: Array):
-            init_matrix = jnp.empty((matrix_size+1, matrix_size+1))
-            state_pairs = jnp.stack([s1, s2])
-            pair_counts = jnp.unique(state_pairs,
-                                    axis=1, return_counts=True,
-                                    size=counts_array_size,
-                                    fill_value=-1)
-            counts_matrix = init_matrix.at[pair_counts[0][0],pair_counts[0][1]].set(pair_counts[1])
-            counts_matrix = counts_matrix[:-1,:-1] # drop the row and column we added to account for -1 fill value
+            encoded = s1.astype(jnp.result_type(int)) * matrix_size + s2.astype(jnp.result_type(int))
+            counts_matrix = jnp.bincount(encoded, length=counts_array_size).reshape(matrix_size, matrix_size)
+            counts_matrix = counts_matrix.astype(jnp.result_type(float))
             P = counts_matrix / counts_matrix.sum()
 
             S_uv = ee.S_mle(P.flatten())
@@ -91,29 +86,25 @@ class MIST:
             return ResidueInteraction(S_uv, S_u, S_v, I_uv, P, S_uv_pos_mean, S_uv_pos_se)
         
         pairwise_interaction_ = jit(pairwise_interaction)
-        host_pairs = list(combinations(list(range(len(names))), 2))
+        host_pairs = combinations(range(len(names)), 2)
         pair_function = lambda x: pairwise_interaction_(states[x[0]], states[x[1]])
         if probability_storage == "dense":
-            pairs = jnp.asarray(host_pairs)
+            pairs = jnp.asarray(list(host_pairs))
             name_pairs = [(names[i], names[j]) for (i,j) in pairs]
             compute_pairs = (vmap(pair_function) if pair_batch_size is None else
                              cvmap(pair_function, chunk_size=pair_batch_size))
             interactions = compute_pairs(pairs)
-            edge_records = zip(name_pairs, interactions.I_uv, interactions.P_uv,
-                               interactions.S_uv_pos_mean, interactions.S_uv_se)
+            edge_records = zip(name_pairs, interactions.I_uv, interactions.P_uv)
         else:
             def sparse_records():
                 # Never concatenate probability batches or retain a dense graph.
                 compute_batch = vmap(pair_function)
-                for start in range(0, len(host_pairs), pair_batch_size):
-                    batch_pairs = host_pairs[start:start + pair_batch_size]
-                    batch = compute_batch(jnp.asarray(batch_pairs))
-                    host_probabilities = np.asarray(batch.P_uv)
+                while batch_pairs := list(islice(host_pairs, pair_batch_size)):
+                    batch = jax.device_get(compute_batch(jnp.asarray(batch_pairs)))
                     for index, (i, j) in enumerate(batch_pairs):
                         yield ((names[i], names[j]), batch.I_uv[index],
-                               SparseProbability.encode(host_probabilities[index]),
-                               batch.S_uv_pos_mean[index], batch.S_uv_se[index])
-                    del host_probabilities, batch
+                               SparseProbability.encode(batch.P_uv[index]))
+                    del batch
             edge_records = sparse_records()
     
         MI_graph = nx.Graph()
@@ -130,19 +121,9 @@ class MIST:
             S_se = S_std
             MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=ctz/ctz.sum(), N_states=K)
 
-        for ((u,v), I, P, S_uv, S_se_uv) in edge_records:
-
-            S_u, S_v = MI_graph.nodes[u]["S_pos_mean"], MI_graph.nodes[v]["S_pos_mean"]
-
-            S_u_se, S_v_se = MI_graph.nodes[u]["S_se"],  MI_graph.nodes[v]["S_se"]
-            I_uv_pos_mean = S_u + S_v - S_uv
-    
-    
-    
-            bias = I - I_uv_pos_mean
-            variance = S_se_uv**2 + S_u_se**2 + S_v_se**2 
-            I_se = jnp.sqrt(variance)
-            MI_graph.add_edge(u, v, P=P, I=float(I), axes=(u,v), I_pos_mean=I_uv_pos_mean, I_se=I_se)
+        for ((u,v), I, P) in edge_records:
+            # Posteriors are calculated after tree fitting; every initial value is NaN.
+            MI_graph.add_edge(u, v, P=P, I=float(I), axes=(u,v), I_pos_mean=np.nan, I_se=np.nan)
         
 
     
@@ -594,20 +575,29 @@ def compute_all_MI_CL(tree, verbose=False):
     return tree
 
 def residue_pseudojackknife(tree):
-    prepared = _PresortedDeletionMST(tree.MI_graph, weight="I")
-    entropies = []
-    contributions = []
-    for n in tree.nodes():
-        other_nodes = [n_ for n_ in tree.MI_graph.nodes() if n_ != n]
-        G = nx.subgraph(tree.MI_graph, other_nodes)
-
-        # estimator="mle" ensures time is not spent re-computing posterior mean entropies
-        # with little effect on estimated variance
-        prefitted_tree, _ = prepared.tree_without(n)
-        tree_resamp = MIST(G, N_obs=tree.N_obs, tree=prefitted_tree, entropy_estimator="mle", calculate_marginals=False, uncertainty=False, prior=tree.prior)
-        
-        entropies.append(tree_resamp.entropy())
-        contributions.append(tree_resamp.residue_entropies() - 0.5*tree_resamp.residue_sum_MIs())
+    """Same deletion trees/reductions, with only final shared marginal writes."""
+    _validate_prior(tree.prior)
+    prepared = _PresortedDeletionMST(tree.MI_graph, weight='I')
+    entropies, contributions, final_marginals = [], [], {}
+    for removed in tree.nodes():
+        selected, _ = prepared.tree_without(removed)
+        for node in selected:
+            neighbor = next(iter(selected[node]), None)
+            if neighbor is not None:
+                edge = selected.edges[node, neighbor]
+                final_marginals[node] = edge['P'], edge['axes']
+        # Identical scalar/pandas operations from the MLE MIST methods.
+        residue_entropy = pd.Series(np.array([selected.nodes[n]['S'] for n in selected]),
+                                    index=list(selected))
+        residue_mi = pd.Series(dict(nx.degree(selected, weight='I')))
+        entropies.append(np.sum(residue_entropy) - selected.size(weight='I'))
+        contributions.append(residue_entropy - 0.5 * residue_mi)
+    # Deletion selection and summaries do not read p, but callers/pickles do.
+    for node, (probability, axes) in final_marginals.items():
+        probability = dense_probability(probability)
+        if node != axes[0]:
+            probability = probability.T
+        tree.MI_graph.nodes[node]['p'] = probability.sum(axis=1)
     contributions_df = pd.concat(contributions, axis=1).map(float)
     contribution_se = contributions_df.std(axis=1, skipna=True)
     return jnp.array(entropies), contributions_df, contribution_se

@@ -1,4 +1,4 @@
-"""Portable checks for exact tree reconstruction and sparse export."""
+"""Regression checks for deletion forests and bounded sparse export."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -38,7 +38,13 @@ class PerformanceContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with h5py.File(Path(folder) / "output.h5", "w") as handle:
                 _write_probabilities(handle, graph)
-                np.testing.assert_array_equal(handle["P"][:], expected)
+                offsets = handle["P/offsets"][:]
+                self.assertEqual(len(offsets), len(expected) + 1)
+                self.assertEqual(handle["P/values"].size, 2 * len(expected))
+                for row, (start, stop) in enumerate(zip(offsets[:-1], offsets[1:])):
+                    restored = np.zeros(expected.shape[1:], dtype=handle["P/values"].dtype)
+                    restored.flat[handle["P/positions"][int(start):int(stop)]] = handle["P/values"][int(start):int(stop)]
+                    np.testing.assert_array_equal(restored, expected[row])
 
 if __name__ == "__main__":
     unittest.main()

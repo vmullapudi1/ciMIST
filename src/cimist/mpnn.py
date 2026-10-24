@@ -129,9 +129,6 @@ def main():
     cst.pymol.tree_cartoon(tree, reference_structure, output_prefix + "pymol" + os.sep)
     cst.io.save_tree_h5(tree, fname)
     
-    with open(fname.replace(".h5", ".pkl"), "wb") as f:
-        pkl.dump(tree, f)
-
     with open(output_prefix + "mpnn_samples.pkl", "wb") as f:
         pkl.dump(samples, f)
 

@@ -46,6 +46,20 @@ ciMIST has given good quantitative results on between 5 and 10 microseconds of m
 ## Usage
 ciMIST ships with a command line tool `ci-mist`. An analysis template illustrating basic aspects of the API is provided in the outputs of each run in the form of a Jupyter notebook.
 
+This branch loads all protein chains as distinct residue instances and evaluates
+every intra- and interchain residue pair. Bonded geometry respects actual
+topology connectivity and periodic boxes. Chain IDs and residue identities are
+retained in results and visualization. No chain pooling or symmetry assumption
+is applied. Internal coordinates describe residue conformations; whole-chain
+translation and rotation are not additional variables in this model.
+
+The coordinate extractor supports canonical amino-acid templates. Unsupported
+protein residues, including retained ASH names, raise an error identifying the
+residue and chain before feature selection can omit them. EM must converge
+within 100 updates; successful fits always refresh responsibilities from the
+final parameters. Undefined component overlaps or nonfinite clustering results
+stop analysis before tree inference.
+
 ```
 usage: ci-mist [-h] [-t TRAJECTORY] [-s TOPOLOGY] [-o OUTPUT_PREFIX] [--seed SEED]
                   [--min_mass MIN_MASS] [--prior {percs,haldane,jeffreys,laplace}]
@@ -140,18 +154,22 @@ options:
 
 HDF5 output uses lossless gzip level 1 plus shuffle for nonempty numeric
 arrays by default. Use `--hdf5_compression none` for uncompressed output;
-Python save functions accept `compression=None`. Existing HDF5 readers work
-without changes.
+Python save functions accept `compression=None`. Load the native sparse tree
+format with `cimist.io.load_h5_tree("RESULTS_ciMIST.h5")`, or read selected
+pairs with `cimist.io.H5ProbabilityReader`. This format replaces the older dense
+HDF5 layout; older files are not supported by this reader.
 
 
 ### Fitting and memory options
 
-The CLI defaults to the safeguarded Newton solver, EM batches of 32 residues,
-pair batches of 128, and exact sparse probability storage. Use `--VMM_BATCH_SIZE`
-and `--PAIR_BATCH_SIZE` to adjust temporary memory use; all trajectory frames
-and residue pairs are retained. Select `--probability_storage dense` for legacy
-dense arrays/pickles. Load default sparse pickles with
-`cimist.io.load_sparse_tree(stream)`.
+The `ci-mist` CLI defaults to sparse probability storage, pair batches of 2048,
+and EM batches covering all residues. Run normally to use these settings;
+select dense in-memory arrays with `--probability_storage dense`.
+`--VMM_BATCH_SIZE` also bounds the final responsibility update, component
+distance calculation and DBSCAN by residue. It preserves all frames and
+components; initialization retains its existing separate residue batches.
+Both modes write native sparse HDF5 directly; the CLI no longer writes a
+full-tree pickle. The copied analysis notebook loads the HDF5 tree directly.
 
 `--solver bfgs` selects the original bounded concentration objective and optimizer.
 Newton solves the same bounded M-step more tightly and can change fitted states

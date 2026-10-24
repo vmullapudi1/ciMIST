@@ -50,11 +50,11 @@ Note that of these options, only 'haldane' and 'percs' add the same total number
                         )
     parser.add_argument("--solver", choices=("newton", "bfgs"), default="newton",
                         help="Default: newton. Safeguarded scalar Newton solves the bounded M-step; bfgs uses the original clipped objective. Newton can change scientific outputs.")
-    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=32,
-                        help='Default: 32. Maximum residues per EM update batch only; all frames retained. Initialization and other stages are unchanged.')
-    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=128,
-                        help="Maximum residue pairs evaluated together; default: 128. A value at least the pair count uses the original full map. All pairs and frames are retained.")
-    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="sparse", help="Default: sparse, exact probabilities with reduced graph memory. Select dense for legacy probability arrays/pickles.")
+    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=None,
+                        help="Maximum residues per EM, responsibility, component-distance and DBSCAN batch. Default: all residues, for either solver. Must be positive; smaller batches reduce temporary memory without dropping frames. Initialization is unchanged.")
+    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=2048,
+                        help="Maximum residue pairs evaluated together; default: 2048. A value at least the pair count uses the original full map. All pairs and frames are retained.")
+    parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="sparse", help="In-memory graph probabilities: sparse (default) reduces memory; dense uses arrays. Tree output is native sparse HDF5 in either mode.")
     parser.add_argument("--hdf5_compression", choices=("gzip", "none"), default="gzip",
                         help="HDF5 numeric arrays: lossless gzip level 1 + shuffle (default), or none.")
     return parser.parse_args(argv)
@@ -71,6 +71,7 @@ import jax
 jax.config.update('jax_enable_x64', True)
 import cimist as cst
 from cimist.utils.chunked_vmap import vmap_chunked as cvmap
+from cimist.utils.trajectory import traj_to_internal, flatten_masks
 import dill as pkl
 from jax import jit, vmap, Array
 import jax.numpy as jnp
@@ -84,6 +85,7 @@ class MDData(NamedTuple):
     angles: Array
     cloud_mask: Array
     residues: List
+    residue_records: List = None
 
 def time_and_message(message, func, printer=logging.info):
     @wraps(func)
@@ -100,25 +102,12 @@ def combine_mixture_fit_batches(batches):
     return cst.ci.vmm.MixtureFitState(*[jnp.concatenate(x) for x in list(zip(*batches))])
 
 def load_dataset(xyz, topology, stride=1,) -> MDData:
-    traj = cst.io.load_traj(xyz, topology, stride=stride)
-    traj, residues = to_single_chain(traj)
-    internal = cst.utils.traj_to_internal(traj)
-    angles, cloud_mask = cst.utils.flatten_masks(internal)
-    return MDData(traj, angles, cloud_mask, residues)
-
-def to_single_chain(traj):
-    traj = traj.atom_slice(traj.topology.select("protein"))
-    df = traj.topology.to_dataframe()[0]
-    seq_ordered = df[df.name == "CA"]
-    ix_update_dict = {(s,n,c) : i for (i,(s,n,c)) in enumerate(zip(seq_ordered.resSeq, seq_ordered.resName, seq_ordered.chainID))}
-    
-    df["resSeq"] = df[["resSeq", "resName", "chainID"]].apply(lambda x: ix_update_dict[tuple(x)], axis=1)
-    df["chainID"] = 0
-    new_top = md.Topology.from_dataframe(df)
-
-    alphabet = "abcdefghijklmnopqrstuvwxyz".upper()
-    residues = [f"{r}{s}_{alphabet[c]}" for (s,r,c) in ix_update_dict.keys()]
-    return md.Trajectory(traj.xyz, new_top), residues
+    traj = cst.io.load_traj(xyz, topology, stride=stride, protein_only=False)
+    internal = traj_to_internal(traj)
+    angles, cloud_mask = flatten_masks(internal)
+    records = internal["residue_records"]
+    return MDData(traj, jnp.asarray(angles), jnp.asarray(cloud_mask),
+                  [record["label"] for record in records], records)
 
 def main():
     args = parse_args()
@@ -138,7 +127,11 @@ def main():
                  args.solver, args.VMM_BATCH_SIZE, args.PAIR_BATCH_SIZE)
 
     data = load_dataset(args.trajectory, args.topology)
-    reference_structure = md.load(args.topology)
+    reference_structure = data.traj.slice(0, copy=False)
+    logging.info("Loaded %d residues in %d chains and %d synchronized frames; "
+                 "using physical bond/torsion references with terminal masks",
+                 len(data.residues), len({r["chain_index"] for r in data.residue_records}),
+                 len(data.traj))
 
     output_prefix = f"{args.output_prefix}_seed_{args.seed}" + os.sep
     if not os.path.exists(output_prefix):
@@ -167,6 +160,9 @@ def main():
                                       gtol=1e-3, gmaxiter=500, solver=args.solver))
     _advance = cvmap(step_if_not_converged, in_axes=(0, 0), chunk_size=args.VMM_BATCH_SIZE)
     num_residues = len(mixture_state.converged)
+    if (args.solver == "newton" and args.VMM_BATCH_SIZE is not None
+            and args.VMM_BATCH_SIZE < num_residues):
+        _advance = jit(_advance)
     num_converged = jnp.sum(mixture_state.converged)
     for i in range(100):
         if num_converged == num_residues:
@@ -190,32 +186,34 @@ def main():
 
     if num_converged != num_residues:
         unfinished = jnp.where(~mixture_state.converged)[0].tolist()
-        message = f"EM did not converge after 100 updates for residue indices {unfinished}"
+        message = f"EM did not converge after 100 updates for residue indices {unfinished}; no conformational states or tree were exported"
         logging.error(message)
         raise RuntimeError(message)
 
+    # Refresh after the last M-step, including convergence on the final update.
     update_r = time_and_message("Carried out final update of mixture component responsibilities",
-        vmap(cst.ci.vmm.update_r))
+        cvmap(cst.ci.vmm.update_r, in_axes=(0, 0), chunk_size=args.VMM_BATCH_SIZE))
     mixture_state = update_r(data.angles, mixture_state)
     
-    D = cst.ci.dbscan.compute_distances(mixture_state)
+    D = cst.ci.dbscan.compute_distances(mixture_state, batch_size=args.VMM_BATCH_SIZE)
+    weights = mixture_state.r.mean(axis=1)
+    cst.ci.dbscan.validate_clustering_inputs(D, weights, mixture_state.r)
     with open(output_prefix + "component_distance.pkl", "wb") as f:
         pkl.dump(D, f)
 
-    weights = mixture_state.r.mean(axis=1)
-
-    compute_states = time_and_message("Determined residue conformations", vmap(cst.ci.dbscan.dbscan_eps_std))
+    compute_states = time_and_message("Determined residue conformations",
+        cvmap(cst.ci.dbscan.dbscan_eps_std, in_axes=(0, 0, 0), chunk_size=args.VMM_BATCH_SIZE))
     states = compute_states(D, weights, mixture_state.r)
+    cst.ci.dbscan.validate_clustering_result(states)
     build_tree = time_and_message("Calculated MIs and inferred maximimum information spanning tree", cst.MIST.from_residue_states)
     tree = build_tree(states, [str(r) for r in data.residues], prior=args.prior, uncertainty=True,
                       pair_batch_size=args.PAIR_BATCH_SIZE, probability_storage=args.probability_storage)
+    tree.MI_graph.graph["coordinate_convention"] = "physical-bond-angles-v1"
+    tree.T.graph["coordinate_convention"] = "physical-bond-angles-v1"
+    for record in data.residue_records:
+        tree.MI_graph.nodes[record["label"]].update(record)
+        tree.T.nodes[record["label"]].update(record)
     fname = output_prefix + "RESULTS_ciMIST.h5"
-
-    with open(fname.replace(".h5", ".pkl"), "wb") as f:
-        if args.probability_storage == "sparse":
-            cst.io.dump_sparse_tree(tree, f)
-        else:
-            pkl.dump(tree, f)
 
     cst.io.save_tree_h5(tree, fname,
         compression=None if args.hdf5_compression == "none" else args.hdf5_compression)
