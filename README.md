@@ -155,4 +155,6 @@ dense arrays/pickles. Load default sparse pickles with
 
 `--solver bfgs` selects the original bounded concentration objective and optimizer.
 Newton solves the same bounded M-step more tightly and can change fitted states
-and scientific outputs.
+and scientific outputs. For either solver, convergence uses the latest two
+post-update mean log-likelihoods. A run that has not converged within 100 EM
+updates stops before clustering or scientific export.

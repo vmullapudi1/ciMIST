@@ -169,15 +169,8 @@ def main():
     num_residues = len(mixture_state.converged)
     num_converged = jnp.sum(mixture_state.converged)
     for i in range(100):
-        if num_converged == num_residues: 
-            # i > 0 ensures we didn't start with a converged set of models 
-            # update responsibilities one last time for predicting barcodes
-            if i > 0:
-                update_r = time_and_message("Carried out final update of mixture component responsibilities",
-                vmap(cst.ci.vmm.update_r),
-                    )
-                mixture_state = update_r(data.angles, mixture_state)
-            break 
+        if num_converged == num_residues:
+            break
         print(80*"-")
         advance = time_and_message(f"Completed EM iteration {i} for all residues", _advance)
         mixture_state = advance(data.angles, mixture_state)
@@ -195,13 +188,15 @@ def main():
                 
         logging.info(f"Reached convergence for {jnp.sum(mixture_state.converged)} out of {len(mixture_state.converged)} residues.")
 
-    if mixture_state.r.sum() == 0:
-        new_r =  vmap(cst.ci.vmm.e_step)(data.angles, mixture_state.mu,
-                                           mixture_state.kappa,
-                                           mixture_state.logw,
-                                           mixture_state.mask)
-        mixture_state = mixture_state._replace(logw = jnp.log(new_r.mean(axis=1)),
-                                           r=new_r)
+    if num_converged != num_residues:
+        unfinished = jnp.where(~mixture_state.converged)[0].tolist()
+        message = f"EM did not converge after 100 updates for residue indices {unfinished}"
+        logging.error(message)
+        raise RuntimeError(message)
+
+    update_r = time_and_message("Carried out final update of mixture component responsibilities",
+        vmap(cst.ci.vmm.update_r))
+    mixture_state = update_r(data.angles, mixture_state)
     
     D = cst.ci.dbscan.compute_distances(mixture_state)
     with open(output_prefix + "component_distance.pkl", "wb") as f:

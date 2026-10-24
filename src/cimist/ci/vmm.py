@@ -275,7 +275,7 @@ def m_step(theta: Array, mu: Array, kappa: Array, r: Array, mask: Array,
 
 def advance_em(theta: Array, state: MixtureFitState, steps: int=10,
                gtol=1e-3, gmaxiter=500, solver="newton") -> MixtureFitState:
-    """Advance an unconverged state by ``steps`` updates, then sort by weight.
+    """Advance an unconverged state by at most ``steps`` updates, then sort by weight.
 
     ``solver`` must be static when this function is used under JIT.
     """
@@ -283,14 +283,15 @@ def advance_em(theta: Array, state: MixtureFitState, steps: int=10,
                  lambda: state,
                  lambda: fori_loop(
                      0, steps,
-                     lambda i, s: em_step(theta, s, gtol, gmaxiter, solver=solver),
+                     lambda i, s: step_if_not_converged(theta, s, gtol, gmaxiter, solver=solver),
                      state))
     return sort_by_weight(state)
 
 
 def is_converged(state: MixtureFitState) -> bool:
-    converged = cond(state.n_iter > 0,
-    lambda x: jnp.abs(x.log_likelihood[x.n_iter] - x.log_likelihood[x.n_iter-1])<x.atol,
+    """Compare the latest two post-update likelihoods, once both exist."""
+    converged = cond(state.n_iter > 1,
+    lambda x: jnp.abs(x.log_likelihood[x.n_iter-1] - x.log_likelihood[x.n_iter-2])<x.atol,
     lambda x: False,
     state)
     return converged
@@ -309,7 +310,8 @@ def em_step(theta: Array, state: MixtureFitState, gtol=1e-3, gmaxiter=500,
             solver="newton") -> MixtureFitState:
     r = predict_proba(theta, state)
     mu, kappa, logw, result = m_step(theta, state.mu, state.kappa, r, state.mask, gtol=gtol, maxiter=gmaxiter, solver=solver)
-    ll = mixture_log_likelihood(theta, state.mu, state.kappa, state.logw, state.mask)
+    # Score the parameters being returned, so convergence cannot lag an M-step.
+    ll = mixture_log_likelihood(theta, mu, kappa, logw, state.mask)
     log_likelihood = state.log_likelihood.at[state.n_iter].set(ll)
     state = state._replace(
         mu = mu,
@@ -322,13 +324,13 @@ def em_step(theta: Array, state: MixtureFitState, gtol=1e-3, gmaxiter=500,
         njevs = (state.nfevs if solver == "bfgs" else state.njevs).at[state.n_iter].set(result.njev),
         nits = state.nits.at[state.n_iter].set(result.nit),
         successes = state.successes.at[state.n_iter].set(result.success),
-        statuses = state.statuses.at[state.n_iter].set(result.status)
+        statuses = state.statuses.at[state.n_iter].set(result.status),
+        n_iter = state.n_iter + 1
     )
     
     converged = is_converged(state)
     
     state = state._replace(
-        n_iter = state.n_iter + 1,
         converged = converged
         )
     return state
