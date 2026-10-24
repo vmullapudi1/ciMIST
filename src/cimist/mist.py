@@ -1,4 +1,5 @@
 from heapq import merge
+from copy import deepcopy
 import math
 from networkx.utils import UnionFind
 #!/usr/bin/env python3
@@ -66,6 +67,8 @@ class MIST:
             raise ValueError("probability_storage must be dense or sparse")
         if probability_storage == "sparse" and pair_batch_size is None:
             raise ValueError("Sparse storage requires an explicit positive pair_batch_size")
+        if not len(names):
+            raise ValueError("Residue selection must not be empty")
 
         states = residue_states.states_traj
         matrix_size = int(jnp.max(states)+1)
@@ -88,7 +91,9 @@ class MIST:
         pairwise_interaction_ = jit(pairwise_interaction)
         host_pairs = combinations(range(len(names)), 2)
         pair_function = lambda x: pairwise_interaction_(states[x[0]], states[x[1]])
-        if probability_storage == "dense":
+        if len(names) == 1:
+            edge_records = ()
+        elif probability_storage == "dense":
             pairs = jnp.asarray(list(host_pairs))
             name_pairs = [(names[i], names[j]) for (i,j) in pairs]
             compute_pairs = (vmap(pair_function) if pair_batch_size is None else
@@ -112,6 +117,11 @@ class MIST:
                 names, residue_states.state_counts, residue_states.n_states
                 ):
             p = ctz/ctz.sum()
+            if len(names) == 1:
+                # DBSCAN counts are compact; singleton nodes have no edge
+                # marginal to restore the original (possibly gappy) labels.
+                counts = jnp.bincount(states[0].astype(jnp.result_type(int)), length=matrix_size)
+                p = counts / counts.sum()
 
 
             S_pos_mean, S_std = jnp.nan, jnp.nan
@@ -119,7 +129,7 @@ class MIST:
             S_mle = ee.S_mle(p)
             bias = S_mle - S_pos_mean
             S_se = S_std
-            MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=ctz/ctz.sum(), N_states=K)
+            MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=p, N_states=K)
 
         for ((u,v), I, P) in edge_records:
             # Posteriors are calculated after tree fitting; every initial value is NaN.
@@ -315,9 +325,49 @@ class MIST:
     def tree_MIs(self):
         return pd.Series([self.T.edges[e][self._I_key] for e in self.T.edges()], index=self.T.edges())
     
+    def _selected_nodes(self, nodelist):
+        requested = list(nodelist)
+        if not requested:
+            raise ValueError("Residue selection must not be empty")
+        selected = set(requested)
+        if len(selected) != len(requested):
+            raise ValueError("Residue selection contains duplicate node labels")
+        unknown = [node for node in requested if node not in self.MI_graph]
+        if unknown:
+            raise ValueError(f"Unknown residue node labels: {unknown!r}")
+        return [node for node in self.MI_graph if node in selected]
+
     def trim(self, nodelist):
-        paths = [list(nx.utils.pairwise(nx.shortest_path(self.T, u, v))) for (u,v) in combinations(nodelist, 2)]
-        return self.T.edge_subgraph(reduce(lambda x,y: list(set(x+y)), paths))
+        """Return a display graph retaining selected nodes and connecting paths.
+
+        Excluded connector nodes retain their full-model statistics. Stored
+        contributions use all neighbors in the original tree (paper Eq. 3),
+        so their selected sum is not a selected-subsystem entropy.
+        """
+        ordered_selection = self._selected_nodes(nodelist)
+        selected = set(ordered_selection)
+        view = self.T.copy()
+        leaves = [node for node in view if node not in selected and view.degree[node] <= 1]
+        while leaves:
+            node = leaves.pop()
+            if node not in view:
+                continue
+            neighbors = list(view[node])
+            view.remove_node(node)
+            leaves.extend(neighbor for neighbor in neighbors
+                          if neighbor not in selected and view.degree[neighbor] <= 1)
+        contributions = self.residue_entropies() - 0.5 * self.residue_sum_MIs()
+        view.graph["view_kind"] = "full_tree_paths"
+        if "residue_selection" in view.graph:
+            view.graph["residue_selection"] = deepcopy(view.graph["residue_selection"])
+        view.graph["focus_selection"] = dict(semantics="display_only", nodes=ordered_selection)
+        if all("residue_index" in view.nodes[node] for node in ordered_selection):
+            view.graph["focus_selection"]["residue_indices"] = [
+                view.nodes[node]["residue_index"] for node in ordered_selection]
+        for node in view:
+            view.nodes[node]["is_selected"] = node in selected
+            view.nodes[node]["full_model_entropy_contribution"] = float(contributions[node])
+        return view
     
     def to_pymol(self, protein_structure: md.Trajectory, path : str,
                 edge_cmap="turbid", edge_vmin=0, edge_vmax=1, min_MI=0.0,
@@ -375,9 +425,43 @@ class MIST:
             self.MI_graph[u][v]["I_CL"] = H_u + H_v - H_uv
         return None
 
-    def refit_to_subset(self, nodelist, uncertainty=False):
-        MI = self.MI_graph.subgraph(nodelist)
-        return MIST(MI, uncertainty=uncertainty)
+    def refit_to_subset(self, nodelist, uncertainty=None):
+        """Infer a new MIST from all empirical pairs of selected residues.
+
+        This estimates the selected marginal subsystem, not a conditional
+        distribution or a trimmed full-tree view. Residue states, probabilities,
+        sample count, prior and estimator are retained. Uncertainty defaults to
+        the parent's setting and is recomputed for the selected system.
+        """
+        selected = self._selected_nodes(nodelist)
+        # Copy attribute dictionaries without copying large probability arrays.
+        MI = self.MI_graph.__class__()
+        MI.graph.update(self.MI_graph.graph)
+        MI.add_nodes_from((node, self.MI_graph.nodes[node]) for node in selected)
+        selected_set, seen = set(selected), set()
+        for node in selected:
+            MI.add_edges_from((node, neighbor, attrs)
+                              for neighbor, attrs in self.MI_graph[node].items()
+                              if neighbor in selected_set and neighbor not in seen)
+            seen.add(node)
+        if "residue_selection" in MI.graph:
+            selection = deepcopy(MI.graph["residue_selection"])
+            selection["refit_from"] = dict(expression=selection.get("expression"),
+                                          residue_indices=selection["residue_indices"])
+            selection.update(semantics="marginal", expression=None,
+                             residue_indices=[MI.nodes[node]["residue_index"] for node in selected])
+            MI.graph["residue_selection"] = selection
+        for _, attrs in MI.nodes(data=True):
+            for key in ("bias", "variance", "S_contribution_se"):
+                attrs.pop(key, None)
+            attrs.update(S_pos_mean=np.nan, S_se=np.nan)
+        for _, _, attrs in MI.edges(data=True):
+            for key in ("bias", "variance", "P_CL", "I_CL"):
+                attrs.pop(key, None)
+            attrs.update(I_pos_mean=np.nan, I_se=np.nan)
+        return MIST(MI, N_obs=self.N_obs, prior=self.prior,
+                    entropy_estimator=self.entropy_estimator,
+                    uncertainty=self.uncertainty if uncertainty is None else uncertainty)
 
     def update_prior(self, prior: str):
         return MIST(self.MI_graph, self.N_obs, prior=prior, uncertainty=True, update_posterior=True)
@@ -599,6 +683,9 @@ def residue_pseudojackknife(tree):
             probability = probability.T
         tree.MI_graph.nodes[node]['p'] = probability.sum(axis=1)
     contributions_df = pd.concat(contributions, axis=1).map(float)
+    if len(tree.T) == 1:
+        # Deleting the sole node leaves entropy zero and no retained contribution.
+        contributions_df = contributions_df.reindex(tree.resnames).astype(float)
     contribution_se = contributions_df.std(axis=1, skipna=True)
     return jnp.array(entropies), contributions_df, contribution_se
 
