@@ -1,4 +1,5 @@
 import os
+import json
 import numpy as np
 import matplotlib as mpl
 import cmocean as cmo
@@ -46,17 +47,28 @@ def tree_cartoon(tree, protein_structure, savedir,
                  node_vmin=0, node_vmax=3.5, min_MI=0.2, base_stick_radius=1,
                 base_sphere_radius=1, entropy_decay_factor=1, node_cmap="algae",
                 cbar_figsize=(3,1),
-                min_stick_radius=0.1):
-    
+                min_stick_radius=0.1, *, focus_nodes=None):
+    """Export the inferred tree or a display-only focus on its existing paths.
+
+    A focus retains excluded connector nodes and full-model statistics. The
+    selected Eq. 3 allocations in focus.json are shares of full-model entropy.
+    Use refit_to_subset to infer a marginal subsystem instead.
+    """
+    savedir = os.fspath(savedir)
+    graph = tree.T if focus_nodes is None else tree.trim(focus_nodes)
+    reslist = list(graph.nodes())
+    protein_structure = protein_structure.slice(0, copy=False)
+    full_ca_indices = _reference_ca_indices(tree, protein_structure.topology)
+    ca_by_node = dict(zip(tree.nodes(), full_ca_indices))
+    ca_indices = np.asarray([ca_by_node[node] for node in reslist])
+
     if not os.path.exists(savedir):
         os.mkdir(savedir)
 
     if type(edge_cmap) == str:
         edge_cmap = CMAPS[edge_cmap]
     
-    protein_structure = protein_structure.slice(0, copy=False)
-    ca_indices = _reference_ca_indices(tree, protein_structure.topology)
-    bfactors = np.exp(-entropy_decay_factor * tree.residue_entropies().values)
+    bfactors = np.exp(-entropy_decay_factor * tree.residue_entropies().loc[reslist].values)
     bfactors_structure = np.zeros(protein_structure.xyz.shape[1])
     bfactors_structure[ca_indices] = bfactors
     protein_structure.save_pdb(savedir + os.sep + "structure.pdb", bfactors=bfactors_structure)
@@ -88,8 +100,7 @@ def tree_cartoon(tree, protein_structure, savedir,
     
     set_q_lines = [5*"\n", "#q-values set to entropy for spectrum\n"]
     
-    reslist = list(tree.nodes())
-    for (u,v) in tree.edges():
+    for (u,v) in graph.edges():
         
         # atom indices
         a1 = reslist.index(u)+1
@@ -104,7 +115,7 @@ def tree_cartoon(tree, protein_structure, savedir,
         )
         # define color for tree edge
         color_name = f"I_{a1}_{a2}"
-        I = tree.edges[u,v][tree._I_key]
+        I = graph.edges[u,v][tree._I_key]
         RGB = edge_cmap(norm(I))[:-1]
         RGB = tuple(np.format_float_positional(x, 16) for x in RGB)
                         
@@ -125,8 +136,8 @@ def tree_cartoon(tree, protein_structure, savedir,
         
         set_color_lines.append(f"cmd.set_color('{color_name}', {RGB})\n")
         
-    for i, (n, index) in enumerate(zip(tree.nodes(), ca_indices), start=1):
-        entropy_ = tree.nodes[n][tree._S_key]
+    for i, (n, index) in enumerate(zip(reslist, ca_indices), start=1):
+        entropy_ = graph.nodes[n][tree._S_key]
         set_q_lines.append(
             f"cmd.alter('structure and index {int(index) + 1}', 'q={entropy_}')\n")
         set_q_lines.append(
@@ -163,6 +174,41 @@ def tree_cartoon(tree, protein_structure, savedir,
                                   "orient\n",
                                   "zoom visible, complete=1\n"],
                     )
+
+        if focus_nodes is not None:
+            f.write("\n# Full-model focus view; Eq. 3 entropy allocations are in focus.json.\n")
+            for selection, selected in (("focus_residues", True), ("connector_residues", False)):
+                atoms = [str(i) for i, node in enumerate(reslist, 1)
+                         if graph.nodes[node]["is_selected"] == selected]
+                expression = "tree and index " + "+".join(atoms) if atoms else "none"
+                f.write(f"select {selection}, {expression}\n")
+            f.write("set sphere_transparency, 0.65, connector_residues\n")
+
+    focus_path = savedir + os.sep + "focus.json"
+    if focus_nodes is not None:
+        records = []
+        identity_fields = ("residue_index", "chain_index", "chain_id", "resSeq",
+                           "name", "segment_id", "ca_atom_index")
+        for i, (node, atom_index) in enumerate(zip(reslist, ca_indices), 1):
+            attrs = graph.nodes[node]
+            identity = {key: attrs[key] for key in identity_fields if key in attrs}
+            records.append(dict(label=node, tree_atom_index_1based=i,
+                reference_atom_index_0based=int(atom_index),
+                is_selected=attrs["is_selected"], identity=identity,
+                full_model_entropy_contribution_nats=attrs["full_model_entropy_contribution"]))
+        metadata = dict(view_kind="full_tree_paths", semantics="display_only",
+            entropy_allocation="full_model_eq3", prior=tree.prior,
+            entropy_estimator=tree.entropy_estimator, N_obs=int(tree.N_obs),
+            model_selection=tree.T.graph.get("residue_selection"),
+            full_model_node_count=len(tree.nodes),
+            selected_full_model_entropy_contribution_nats=sum(
+                record["full_model_entropy_contribution_nats"] for record in records if record["is_selected"]),
+            residues=records)
+        with open(focus_path, "w") as f:
+            json.dump(metadata, f, indent=2, allow_nan=False, default=np.generic.item)
+    elif os.path.exists(focus_path):
+        # Reusing a focus directory for a complete view must clear its old label.
+        os.remove(focus_path)
 
     # CREATE THE COLORBAR
     fig, ax = plt.subplots(2, 1, figsize=cbar_figsize, layout='constrained')

@@ -386,7 +386,7 @@ class MIST:
                 node_cmap="algae", node_vmin=0, node_vmax=3.5, 
                 entropy_decay_factor=1, base_stick_radius=1, base_sphere_radius=1, 
                 min_stick_radius=0.1,
-                cbar_figsize=(3,1)
+                cbar_figsize=(3,1), *, focus_nodes=None
                 ):
         """
         Create files for visualization of the tree in PyMOL.
@@ -403,6 +403,10 @@ class MIST:
         and 'colorbar.png'. The tree is visualized by opening PyMOL and running
         draw_tree.pml.
 
+        ``focus_nodes`` optionally selects full-tree paths for display, retaining
+        excluded connector residues. This writes focus.json with full-model
+        Eq. 3 entropy allocations; it does not infer a marginal subsystem.
+
         Notes
         -----
         Available colormaps are those in the Python libraries cmasher and cmocean.
@@ -418,7 +422,8 @@ class MIST:
                 node_cmap=node_cmap, node_vmin=node_vmin, node_vmax=node_vmax,
                 cbar_figsize=cbar_figsize, min_MI=min_MI,
                 base_stick_radius=base_stick_radius, base_sphere_radius=base_sphere_radius,
-                entropy_decay_factor=entropy_decay_factor, min_stick_radius=min_stick_radius)
+                entropy_decay_factor=entropy_decay_factor, min_stick_radius=min_stick_radius,
+                focus_nodes=focus_nodes)
         print(f"Wrote files for PyMOL visualization to directory {path}.", flush=True)
 
     def _compute_implied_pairwise_marginals(self):

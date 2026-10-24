@@ -145,6 +145,13 @@ contributions gives their allocated share of full-system entropy, not a
 subsystem marginal entropy. For a singleton, aggregate uncertainty is retained;
 its per-residue deletion-contribution standard error is undefined (NaN).
 
+To export that full-tree focus view, use
+`full.to_pymol(structure, "focus_view", focus_nodes=names)`, where `structure`
+is the original reference trajectory. PyMOL selections `focus_residues` and
+`connector_residues` distinguish the two groups. `focus.json` records original
+identities and explicitly labeled full-model Eq. 3 allocations. To visualize
+the newly inferred subsystem, use `subset.to_pymol(structure, "subset_view")`.
+
 `subset.information_matrix(diag=True)` shows empirical pairwise mutual
 information, with marginal entropy on the diagonal. `kind="chow_liu"` instead
 shows mutual information implied by the fitted tree. Both use empirical
