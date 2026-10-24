@@ -483,6 +483,8 @@ def joint_distribution(T, u, v):
         return jnp.dot(P_ui, P_uv)
     
     P_u = jnp.diag(T.nodes[u]["p"])
+    if not path_edges:
+        return P_u
     P_uv = jnp.linalg.multi_dot([P_u] + [_transfer_matrix(T.T,u,v) for (u,v) in path_edges])
     return P_uv
 
@@ -533,7 +535,7 @@ def get_log_prob_and_sampling_fns(tree, root=None):
     # children and forms a stack of transfer matrices in that order
     Paths = get_paths_to_leaves(tree, root)
     aggregate_paths = lambda p1, p2: p1 + [e for e in p2 if e not in p1]
-    edgelist = list(reduce(aggregate_paths, Paths)) 
+    edgelist = list(reduce(aggregate_paths, Paths, []))
     transfer_matrices = [transfer_matrix(tree.T, u, v) for (u,v) in edgelist] # transfer matrices
     
     # i gets the index of the edge in the product over conditional probabilities
@@ -543,6 +545,8 @@ def get_log_prob_and_sampling_fns(tree, root=None):
     @jit
     def log_prob_fn(barcode):
         root_term = root_log_p[barcode[root_ix]]
+        if not edge_ixs:
+            return root_term
         sum_couplings = jnp.sum(jnp.stack(
             [jnp.log(transfer_matrices[i][barcode[u], barcode[v]]) # barcode[u], barcode[v] gets the 
              for (i,u,v) in edge_ixs]))
