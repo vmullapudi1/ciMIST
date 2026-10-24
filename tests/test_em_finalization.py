@@ -82,9 +82,10 @@ class EMFinalization(unittest.TestCase):
             stack.enter_context(patch.object(fit.logging, "basicConfig"))
             stack.enter_context(redirect_stdout(io.StringIO()))
             if failed_step and solver == "newton":
-                error = "Newton M-step failed for residue indices"
+                error = "Newton M-step failed for residues"
             elif final_update > 100 and not preconverged:
-                error = r"EM did not converge after 100 updates for residue indices \[1\]"
+                error = (r"EM did not converge after 100 updates for residues GLY2_A "
+                         r"\(original topology residue index 1, feature row 1\);")
             else:
                 error = None
             if error is not None:

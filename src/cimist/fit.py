@@ -117,6 +117,13 @@ def make_initialization_keys(data, seed):
     keys = jax.random.split(jax.random.PRNGKey(seed), len(data.protein_residue_indices))
     return keys[rows]
 
+
+def _describe_residues(data, rows):
+    return ", ".join(f"{data.residues[row]} (original topology residue index "
+                     f"{data.residue_records[row]['residue_index']}, feature row {row})"
+                     for row in rows)
+
+
 def main():
     args = parse_args()
 
@@ -186,7 +193,8 @@ def main():
             if not bool(jnp.all(successful)):
                 failed = jnp.where(~successful.astype(bool))[0].tolist()
                 statuses = jnp.take_along_axis(mixture_state.statuses, last_step, axis=1)[:, 0]
-                message = f"Newton M-step failed for residue indices {failed}; statuses {statuses[jnp.asarray(failed)].tolist()}"
+                message = (f"Newton M-step failed for residues {_describe_residues(data, failed)}; "
+                           f"statuses {statuses[jnp.asarray(failed)].tolist()}")
                 logging.error(message)
                 raise RuntimeError(message)
         
@@ -195,7 +203,8 @@ def main():
 
     if num_converged != num_residues:
         unfinished = jnp.where(~mixture_state.converged)[0].tolist()
-        message = f"EM did not converge after 100 updates for residue indices {unfinished}; no conformational states or tree were exported"
+        message = (f"EM did not converge after 100 updates for residues {_describe_residues(data, unfinished)}; "
+                   "no conformational states or tree were exported")
         logging.error(message)
         raise RuntimeError(message)
 
