@@ -66,7 +66,8 @@ class EMFinalization(unittest.TestCase):
         data = SimpleNamespace(
             traj=Mock(), angles=angles, cloud_mask=initial.mask,
             residues=["GLY1_A", "GLY2_A"],
-            residue_records=[dict(chain_index=0), dict(chain_index=0)])
+            residue_records=[dict(chain_index=0, residue_index=0), dict(chain_index=0, residue_index=1)],
+            protein_residue_indices=[0, 1])
         data.traj.__len__ = Mock(return_value=7)
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
             args = fit.parse_args(["-o", str(Path(folder) / "run"),

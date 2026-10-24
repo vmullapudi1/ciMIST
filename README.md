@@ -63,6 +63,7 @@ stop analysis before tree inference.
 ```
 usage: ci-mist [-h] [-t TRAJECTORY] [-s TOPOLOGY] [-o OUTPUT_PREFIX] [--seed SEED]
                   [--min_mass MIN_MASS] [--prior {percs,haldane,jeffreys,laplace}]
+                  [--residue-selection RESIDUE_SELECTION]
 
 options:
   -h, --help            show this help message and exit
@@ -75,6 +76,8 @@ options:
                         The path to the topology file.
   -o, --output_prefix OUTPUT_PREFIX
                         The prefix for the output directory.
+  --residue-selection RESIDUE_SELECTION
+                        MDTraj selection of protein residue centers; default: all.
   --seed SEED           The random number generator seed, default 0.
   --min_mass MIN_MASS   Minimum probability for conformations, default 0.01.
   --prior {percs,haldane,jeffreys,laplace}
@@ -91,6 +94,56 @@ options:
 ```
 
 An example demonstrating how to analyze outputs is given in [examples/CRIPT.ipynb](examples/CRIPT.ipynb).
+
+### Selecting a marginal subsystem
+
+Select residue centers with an MDTraj expression, for example:
+
+```bash
+ci-mist -t trajectory.xtc -s topology.pdb -o selected --seed 0 \
+  --residue-selection '(chainid 0 and resSeq 10 to 30) or (chainid 1 and resSeq 40 to 60)'
+```
+
+`chainid` is the zero-based **original topology chain index**; `resSeq` is the
+input residue number, and `resid` is the zero-based original topology residue
+index. Ranges are inclusive. Selections retain canonical topology order;
+exported node identities include chain ID, chain index, residue number and
+original residue index. Empty selections fail; a singleton gives its marginal
+entropy with no pair edges.
+
+Excluded residues remain physically present and supply neighboring atoms needed
+for valid angles and torsions. Their states are omitted from inference, so the
+new tree estimates the selected residues' marginal entropy, averaged over the
+excluded environment. Core-mediated correlations can remain; this does not
+condition on the core or remove its physical influence. Every trajectory frame
+and every selected intra- and interchain pair is retained. Initialization uses
+each residue's original full-protein random key. Fewer centers reduce fitting
+and pairwise work, but the full trajectory is still loaded for geometric context.
+
+Python loaders `cimist.io.load_dataset`, `cimist.io.traj_to_dataset` and
+`cimist.fit.load_dataset` accept the same `residue_selection` keyword, or an
+iterable of original topology residue indices. Their `residue_records` describe
+the selected rows; `protein_residue_indices` retains the full key ordering.
+
+Reuse an existing full analysis without repeating conformational inference:
+
+```python
+from cimist.io import load_h5_tree, save_tree_h5
+
+full = load_h5_tree("RESULTS_ciMIST.h5")
+names = [name for name in full.resnames if 10 <= full.nodes[name]["resSeq"] <= 30]
+subset = full.refit_to_subset(names)
+save_tree_h5(subset, "selected_tree.h5")
+```
+
+Refitting builds a new tree from all selected empirical pairs, preserves the
+sample count, prior and estimator, and recomputes uncertainty without changing
+the parent model. `full.trim(names)` instead returns a display graph containing
+the selected nodes and their connecting paths through the full tree. Its
+`full_model_entropy_contribution` attributes follow paper Eq. 3; summing selected
+contributions gives their allocated share of full-system entropy, not a
+subsystem marginal entropy. For a singleton, aggregate uncertainty is retained;
+its per-residue deletion-contribution standard error is undefined (NaN).
 
 ## Visualization of results in PyMOL
 The program will create a directory of your choosing containing pre-generated scripts that will visualize trees on protein structure.

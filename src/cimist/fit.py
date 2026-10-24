@@ -27,6 +27,8 @@ Note that if a directory is supplied, all files in that directory must be valid 
 dynamics trajectory files.""")
     parser.add_argument("-s", "--topology", type=str,
     help=f"""The path to the topology file.""")
+    parser.add_argument("--residue-selection", default=None,
+                        help="MDTraj selection of protein residue centers, e.g. 'chainid 0 and resSeq 10 to 30'. chainid and resid are zero-based original topology indices; resSeq is the input residue number. Default: all supported protein residues. Covalent context and every frame are retained.")
     
     parser.add_argument("-o", "--output_prefix", 
     help=f"""The prefix for the output directory.""")
@@ -71,7 +73,6 @@ import jax
 jax.config.update('jax_enable_x64', True)
 import cimist as cst
 from cimist.utils.chunked_vmap import vmap_chunked as cvmap
-from cimist.utils.trajectory import traj_to_internal, flatten_masks
 import dill as pkl
 from jax import jit, vmap, Array
 import jax.numpy as jnp
@@ -86,6 +87,7 @@ class MDData(NamedTuple):
     cloud_mask: Array
     residues: List
     residue_records: List = None
+    protein_residue_indices: List = None
 
 def time_and_message(message, func, printer=logging.info):
     @wraps(func)
@@ -101,13 +103,19 @@ def time_and_message(message, func, printer=logging.info):
 def combine_mixture_fit_batches(batches):
     return cst.ci.vmm.MixtureFitState(*[jnp.concatenate(x) for x in list(zip(*batches))])
 
-def load_dataset(xyz, topology, stride=1,) -> MDData:
-    traj = cst.io.load_traj(xyz, topology, stride=stride, protein_only=False)
-    internal = traj_to_internal(traj)
-    angles, cloud_mask = flatten_masks(internal)
-    records = internal["residue_records"]
-    return MDData(traj, jnp.asarray(angles), jnp.asarray(cloud_mask),
-                  [record["label"] for record in records], records)
+def load_dataset(xyz, topology, stride=1, *, residue_selection=None) -> MDData:
+    data = cst.io.load_dataset(xyz, topology, stride=stride,
+                               residue_selection=residue_selection)
+    return MDData(data.traj, data.angles, data.cloud_mask, data.residues,
+                  data.residue_records, data.protein_residue_indices)
+
+
+def make_initialization_keys(data, seed):
+    """Retain each residue's original full-protein initialization key."""
+    positions = {index: row for row, index in enumerate(data.protein_residue_indices)}
+    rows = jnp.asarray([positions[record["residue_index"]] for record in data.residue_records])
+    keys = jax.random.split(jax.random.PRNGKey(seed), len(data.protein_residue_indices))
+    return keys[rows]
 
 def main():
     args = parse_args()
@@ -126,23 +134,24 @@ def main():
     logging.info("Solver: %s; EM batch size: %s; pair batch size: %s",
                  args.solver, args.VMM_BATCH_SIZE, args.PAIR_BATCH_SIZE)
 
-    data = load_dataset(args.trajectory, args.topology)
+    data = load_dataset(args.trajectory, args.topology, residue_selection=args.residue_selection)
     reference_structure = data.traj.slice(0, copy=False)
     logging.info("Loaded %d residues in %d chains and %d synchronized frames; "
                  "using physical bond/torsion references with terminal masks",
                  len(data.residues), len({r["chain_index"] for r in data.residue_records}),
                  len(data.traj))
+    logging.info("Selected original topology residues %s from %d protein residues; "
+                 "inferring their marginal network over all frames",
+                 [record["residue_index"] for record in data.residue_records],
+                 len(data.protein_residue_indices))
 
     output_prefix = f"{args.output_prefix}_seed_{args.seed}" + os.sep
     if not os.path.exists(output_prefix):
         os.mkdir(output_prefix)
 
     
-    def make_keys(seed):
-        return jax.random.split(jax.random.PRNGKey(seed), data.cloud_mask.shape[0])
-    
     # make batches for kmeans++
-    init_keys = make_keys(args.seed)
+    init_keys = make_initialization_keys(data, args.seed)
     n_chunks = max(1, data.angles.shape[0] // 20)
     angles_batches = jnp.array_split(data.angles, n_chunks)
     mask_batches = jnp.array_split(data.cloud_mask, n_chunks)
@@ -210,6 +219,12 @@ def main():
                       pair_batch_size=args.PAIR_BATCH_SIZE, probability_storage=args.probability_storage)
     tree.MI_graph.graph["coordinate_convention"] = "physical-bond-angles-v1"
     tree.T.graph["coordinate_convention"] = "physical-bond-angles-v1"
+    selection = dict(semantics="marginal", expression=args.residue_selection,
+                     residue_indices=[record["residue_index"] for record in data.residue_records],
+                     protein_residue_indices=data.protein_residue_indices,
+                     initialization="full-protein-split", seed=args.seed)
+    for graph in (tree.MI_graph, tree.T):
+        graph.graph["residue_selection"] = selection.copy()
     for record in data.residue_records:
         tree.MI_graph.nodes[record["label"]].update(record)
         tree.T.nodes[record["label"]].update(record)

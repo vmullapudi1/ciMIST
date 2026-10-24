@@ -23,28 +23,72 @@ class DataSet(NamedTuple):
     traj: md.Trajectory
     angles: Array
     cloud_mask: Array
+    residue_records: list
+    protein_residue_indices: list
 
-def load_dataset(trajfile: str, topfile: str, stride: int=1) -> DataSet:
+    @property
+    def residues(self):
+        return [record["label"] for record in self.residue_records]
+
+
+def _resolve_residue_selection(topology, selection):
+    # Validate the entire protein before a selection can hide unsupported chemistry.
+    records = utils.nerfax.parser.residue_records(topology)
+    full_indices = [record["residue_index"] for record in records]
+    if selection is None:
+        selected = full_indices
+    elif isinstance(selection, str):
+        if not selection.strip():
+            raise ValueError("Residue selection must not be empty")
+        atoms = topology.select(selection)
+        requested = {topology.atom(int(index)).residue.index for index in atoms}
+        selected = [index for index in full_indices if index in requested]
+    else:
+        try:
+            indices = list(selection)
+        except TypeError as error:
+            raise ValueError("Residue selection must be an MDTraj expression or original topology residue indices") from error
+        if any(isinstance(index, (bool, np.bool_)) or not isinstance(index, (int, np.integer))
+               for index in indices):
+            raise ValueError("Residue selection indices must be integers")
+        requested = set(indices)
+        if len(requested) != len(indices):
+            raise ValueError("Residue selection contains duplicate topology indices")
+        if not requested.issubset(full_indices):
+            raise ValueError("Residue selection must contain supported protein topology indices")
+        selected = [index for index in full_indices if index in requested]
+    if not selected:
+        raise ValueError("Residue selection matched no supported protein residues")
+    return selected, full_indices
+
+def load_dataset(trajfile: str, topfile: str, stride: int=1, *, residue_selection=None) -> DataSet:
     """Load protein angular features while preserving original atom identities.
 
     All trajectory atoms are retained as covalent context, including caps or
-    other nonprotein atoms. Feature rows follow
-    ``utils.nerfax.parser.residue_records(dataset.traj.topology)``. Frames, times,
-    chain IDs and periodic boxes retain their input order and values.
+    other nonprotein atoms. ``residue_selection`` accepts an MDTraj selection
+    expression or original topology residue indices; None selects all supported
+    protein residues. Feature rows retain topology order and their identities
+    are in ``dataset.residue_records``. Frames, times, chain IDs and periodic
+    boxes retain their input order and values.
     """
 
     traj = load_traj(trajfile, topfile, stride=stride, protein_only=False)
-    return traj_to_dataset(traj)
+    return traj_to_dataset(traj, residue_selection=residue_selection)
 
-def traj_to_dataset(traj: md.Trajectory):
+def traj_to_dataset(traj: md.Trajectory, *, residue_selection=None):
     """Extract physical protein angles without modifying the supplied trajectory.
 
-    Feature rows follow ``utils.nerfax.parser.residue_records(traj.topology)``;
-    the returned trajectory also retains any nonprotein context atoms.
+    Selection uses the same expression/indices as ``load_dataset``. Selecting
+    any atom selects its protein residue as a feature center. Excluded residues
+    remain covalent context; this targets selected conformational marginals,
+    without conditioning on excluded residues or removing their influence.
     """
 
-    angles, cloud_mask = utils.flatten_masks(utils.traj_to_internal(traj))
-    return DataSet(traj, jnp.asarray(angles), jnp.asarray(cloud_mask))
+    indices, full_indices = _resolve_residue_selection(traj.topology, residue_selection)
+    internal = utils.traj_to_internal(traj, residue_indices=indices)
+    angles, cloud_mask = utils.flatten_masks(internal)
+    return DataSet(traj, jnp.asarray(angles), jnp.asarray(cloud_mask),
+                   internal["residue_records"], full_indices)
 
 def load_traj(trajpath: str, top: str, stride: int = 1, protein_only=True) -> md.Trajectory:
     """
