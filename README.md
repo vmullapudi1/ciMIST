@@ -141,8 +141,7 @@ options:
 HDF5 output uses lossless gzip level 1 plus shuffle for nonempty numeric
 arrays by default. Use `--hdf5_compression none` for uncompressed output;
 Python save functions accept `compression=None`. Existing HDF5 readers work
-without changes. See [compression details and validation scope](docs/performance/COMPRESSION.md).
-Performance tables report runs with compression disabled (`--hdf5_compression none`).
+without changes.
 
 
 ### Memory defaults
@@ -151,4 +150,3 @@ The `ci-mist` CLI defaults to sparse probability storage, pair batches of 128,
 and EM batches covering all residues. Run normally to use these settings;
 opt into dense arrays/pickles with `--probability_storage dense`.
 Load default sparse pickles with `cimist.io.load_sparse_tree(stream)`.
-See [performance settings and compatibility](docs/performance/README.md).

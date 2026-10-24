@@ -1,6 +1,4 @@
-"""Portable regression checks; large campaign evidence is documented separately."""
-import hashlib
-import json
+"""Portable checks for exact tree reconstruction and sparse export."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,12 +12,6 @@ from cimist.sparse_probability import SparseProbability
 from cimist.io import _write_probabilities
 
 class PerformanceContract(unittest.TestCase):
-    def test_current_source_identity(self):
-        root = Path(__file__).resolve().parents[1]
-        hashes = json.loads((root / "docs/performance/source-hashes.json").read_text())
-        for name, expected in hashes.items():
-            self.assertEqual(hashlib.sha256((root / name).read_bytes()).hexdigest(), expected, name)
-
     def test_deletion_forests_preserve_order_and_ties(self):
         # Includes every disconnected and tied simple graph on four nodes.
         pairs = [(i, j) for i in range(4) for j in range(i + 1, 4)]

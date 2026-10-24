@@ -1,6 +1,0 @@
-{
-  "wall_seconds": 1474.1882933159359,
-  "cpu_seconds": 7670.450350022,
-  "peak_process_rss_bytes": 36885180416,
-  "scope": "Target CLI source imports and full main(), including raw exports; excludes instrument startup, validation and compression"
-}
