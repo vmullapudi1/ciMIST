@@ -282,45 +282,57 @@ class MIST:
         return self.sum_marginal_entropy() - self.sum_MIs()
     
     def information_matrix(self, resis=None, kind="empirical", diag=False):
+        """Return pairwise information in nats, in canonical parent node order.
+
+        ``resis`` filters node labels without refitting the model. ``empirical``
+        uses observed pair probabilities; ``chow_liu`` uses marginals implied
+        by the current tree, including paths through unselected nodes. ``hybrid``
+        places empirical values above and tree-implied values below the diagonal.
+        Both are plug-in estimates, independent of ``entropy_estimator``; posterior
+        tree estimates remain available through ``tree_MIs`` and ``residue_entropies``.
+        With ``diag=True``, the diagonal contains empirical marginal entropies;
+        otherwise it is zero. Empty, duplicate or unknown selections raise ValueError.
         """
-        
-
-        Parameters
-        ----------
-        resis : TYPE, optional
-            DESCRIPTION. The default is None.
-        kind : string, optional
-            The default is "hybrid". Options are "hybrid", "empirical", and "chow_liu".
-        diag : bool, optional
-            Whether to plot the entropies (self-informations) on the diagonal. The default is False.
-
-        Raises
-        ------
-        Exception
-            DESCRIPTION.
-
-        Returns
-        -------
-        TYPE
-            DESCRIPTION.
-
-        """
+        resis = None if resis is None else list(resis)
         if kind == "hybrid":
             udag = np.triu(self.empirical_information_matrix(resis=resis, diag=diag))
-            ldag = np.tril(self.chow_liu_information_matrix(resis=resis, diag=False))
+            ldag = np.tril(self.chow_liu_information_matrix(resis=resis, diag=False), k=-1)
             return udag + ldag
         elif kind == "chow_liu":
             return self.chow_liu_information_matrix(resis=resis, diag=diag)
         elif kind == "empirical":
             return self.empirical_information_matrix(resis=resis, diag=diag)
         else:
-            raise Exception("argument kind must be 'hybrid', 'chow_liu' , or 'empirical'.")
+            raise ValueError("argument kind must be 'hybrid', 'chow_liu' , or 'empirical'.")
 
-    def empirical_information_matrix(self):
-        return np.array(nx.adjacency_matrix(self.MI_graph, weight=self._I_key).todense())
+    def empirical_information_matrix(self, resis=None, diag=False):
+        """Return observed plug-in MI (and optional marginal entropy) in nats."""
+        selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
+        matrix = np.zeros((len(selected), len(selected)), dtype=float)
+        for i, u in enumerate(selected):
+            if diag:
+                matrix[i, i] = self.MI_graph.nodes[u]["S"]
+            for j in range(i + 1, len(selected)):
+                matrix[i, j] = matrix[j, i] = self.MI_graph[u][selected[j]]["I"]
+        return matrix
     
-    def chow_liu_information_matrix(self):
-        return np.array(nx.adjacency_matrix(self.MI_graph, weight="I_CL").todense())
+    def chow_liu_information_matrix(self, resis=None, diag=False):
+        """Return current-tree plug-in MI without retaining pairwise joint caches.
+
+        Only requested pairs are evaluated. Each temporary joint distribution
+        is discarded after its entropy is calculated; existing I_CL/P_CL fields
+        are unused because they may describe a different tree or edge knockout.
+        """
+        selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
+        matrix = np.zeros((len(selected), len(selected)), dtype=float)
+        for i, u in enumerate(selected):
+            if diag:
+                matrix[i, i] = self.nodes[u]["S"]
+            for j in range(i + 1, len(selected)):
+                v = selected[j]
+                joint_entropy = float(ee.S_mle(joint_distribution(self, u, v)))
+                matrix[i, j] = matrix[j, i] = self.nodes[u]["S"] + self.nodes[v]["S"] - joint_entropy
+        return matrix
     
     def tree_MIs(self):
         return pd.Series([self.T.edges[e][self._I_key] for e in self.T.edges()], index=self.T.edges())
@@ -478,8 +490,10 @@ def joint_distribution(T, u, v):
             P_uv = dense_probability(T[u][v]["P"]).T
         else:
             raise Exception(f"Axes specification error, received edges {(u,v)} and got axes {axes}")
-        replace_inf_with_zero = lambda x: jnp.where(jnp.isinf(x), 0, x)
-        P_ui = jnp.diag(replace_inf_with_zero(1.0 / T.nodes[u]["p"]))
+        p = jnp.asarray(T.nodes[u]["p"])
+        # Unobserved state labels have zero transition rows.
+        inverse_p = jnp.where(p == 0, 0, 1.0 / jnp.where(p == 0, 1, p))
+        P_ui = jnp.diag(inverse_p)
         return jnp.dot(P_ui, P_uv)
     
     P_u = jnp.diag(T.nodes[u]["p"])

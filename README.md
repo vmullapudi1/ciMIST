@@ -145,6 +145,13 @@ contributions gives their allocated share of full-system entropy, not a
 subsystem marginal entropy. For a singleton, aggregate uncertainty is retained;
 its per-residue deletion-contribution standard error is undefined (NaN).
 
+`subset.information_matrix(diag=True)` shows empirical pairwise mutual
+information, with marginal entropy on the diagonal. `kind="chow_liu"` instead
+shows mutual information implied by the fitted tree. Both use empirical
+probabilities; posterior estimates for tree edges remain available through
+`tree_MIs()`. Passing `resis=names` selects a matrix view of the existing model
+in canonical node order; it does not refit a subsystem tree.
+
 ## Visualization of results in PyMOL
 The program will create a directory of your choosing containing pre-generated scripts that will visualize trees on protein structure.
 These visualizations have the option to be color-coded using the [cmocean](https://matplotlib.org/cmocean/) or [cmasher](https://github.com/1313e/CMasher) colormaps, which provide nice contrasts for protein structures.
