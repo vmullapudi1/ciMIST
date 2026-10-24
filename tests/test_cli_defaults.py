@@ -18,7 +18,7 @@ from cimist.sparse_probability import SparseProbability, dense_probability
 class CLIDefaults(unittest.TestCase):
     def test_benchmarked_defaults_and_overrides(self):
         args = parse_args([])
-        self.assertEqual(args.VMM_BATCH_SIZE, None)
+        self.assertEqual(args.VMM_BATCH_SIZE, 32)
         self.assertEqual(args.PAIR_BATCH_SIZE, 128)
         self.assertEqual(args.probability_storage, "sparse")
         self.assertEqual(args.hdf5_compression, "gzip")
