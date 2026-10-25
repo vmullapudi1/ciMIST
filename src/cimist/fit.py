@@ -17,6 +17,13 @@ def positive_batch_size(value):
     return size
 
 
+def probability_mass(value):
+    mass = float(value)
+    if not 0 <= mass <= 1:
+        raise argparse.ArgumentTypeError("probability mass must be finite and between 0 and 1")
+    return mass
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 
@@ -34,8 +41,8 @@ dynamics trajectory files.""")
     help=f"""The prefix for the output directory.""")
     parser.add_argument("--seed", type=int, default=0,
     help="The random number generator seed, default 0.")
-    parser.add_argument("--min_mass", type=float, default=0.01,
-    help="Minimum probability for conformations, default 0.01.")
+    parser.add_argument("--min_mass", type=probability_mass, default=0.01,
+    help="Minimum neighborhood probability mass for a DBSCAN core component, in [0, 1]; default 0.01.")
     parser.add_argument("--prior",
                         type=str,
                         default="haldane",
@@ -220,7 +227,8 @@ def main():
         pkl.dump(D, f)
 
     compute_states = time_and_message("Determined residue conformations",
-        cvmap(cst.ci.dbscan.dbscan_eps_std, in_axes=(0, 0, 0), chunk_size=args.VMM_BATCH_SIZE))
+        cvmap(partial(cst.ci.dbscan.dbscan_eps_std, min_probability_mass=args.min_mass),
+              in_axes=(0, 0, 0), chunk_size=args.VMM_BATCH_SIZE))
     states = compute_states(D, weights, mixture_state.r)
     cst.ci.dbscan.validate_clustering_result(states)
     build_tree = time_and_message("Calculated MIs and inferred maximimum information spanning tree", cst.MIST.from_residue_states)

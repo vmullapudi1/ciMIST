@@ -79,7 +79,8 @@ options:
   --residue-selection RESIDUE_SELECTION
                         MDTraj selection of protein residue centers; default: all.
   --seed SEED           The random number generator seed, default 0.
-  --min_mass MIN_MASS   Minimum probability for conformations, default 0.01.
+  --min_mass MIN_MASS   Minimum neighborhood probability mass for a DBSCAN core
+                        component, in [0, 1]; default 0.01.
   --prior {percs,haldane,jeffreys,laplace}
                         Prior to use for residue entropy and pairwise mutual information estimation with the Dirichlet distribution.
                         Each prior corresponds to adding the same number of pseudocounts to each conformation.
