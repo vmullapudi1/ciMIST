@@ -96,6 +96,25 @@ options:
 
 An example demonstrating how to analyze outputs is given in [examples/CRIPT.ipynb](examples/CRIPT.ipynb).
 
+### Memory settings and output format
+
+Newton remains the default solver. This branch defaults to all residues per
+conformational-inference batch and 2,048 pairs per probability batch, targeting
+the usual 256 GB nodes. `--VMM_BATCH_SIZE 32` limits each EM, responsibility,
+component-distance and DBSCAN batch to 32 residues; `--PAIR_BATCH_SIZE 128`
+limits pair batches. Both retain every frame and selected pair. Smaller batches
+reduce temporary memory, but do not bound total memory: the trajectory, fitted
+models and candidate graph still need storage. Use `ci-mist --help` for all
+options. These defaults differ from the preceding Newton performance branch's
+EM32/pair128 settings.
+
+`RESULTS_ciMIST.h5` is a lossless, versioned sparse snapshot, compressed with
+gzip by default. Load it with `cimist.io.load_h5_tree`; use
+`cimist.io.H5ProbabilityReader` to read selected pair tables without loading the
+whole model. `--probability_storage` controls the in-memory representation;
+exports use the sparse format in either mode. Older HDF5 outputs are not
+supported by the new reader. Re-run an analysis to create the new format.
+
 ### Selecting a marginal subsystem
 
 Select residue centers with an MDTraj expression, for example:
