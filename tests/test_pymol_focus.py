@@ -65,6 +65,10 @@ class PymolFocus(unittest.TestCase):
             self.assertIn("select focus_residues, tree and index 3+4", commands)
             self.assertIn("select connector_residues, tree and index 1+2", commands)
             self.assertIn("Full-model focus view", commands)
+            # PyMOL splits commands at semicolons even on comment lines.
+            for line in commands.splitlines():
+                if line.lstrip().startswith("#"):
+                    self.assertNotIn(";", line)
             self.assertNotIn("resi ", commands)
             for u, v in self.tree.T.edges:
                 self.assertIn(f"cmd.bond('tree and index {self.names.index(u) + 1}', "

@@ -176,7 +176,7 @@ def tree_cartoon(tree, protein_structure, savedir,
                     )
 
         if focus_nodes is not None:
-            f.write("\n# Full-model focus view; Eq. 3 entropy allocations are in focus.json.\n")
+            f.write("\n# Full-model focus view. Eq. 3 entropy allocations are in focus.json.\n")
             for selection, selected in (("focus_residues", True), ("connector_residues", False)):
                 atoms = [str(i) for i, node in enumerate(reslist, 1)
                          if graph.nodes[node]["is_selected"] == selected]
