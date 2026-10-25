@@ -61,7 +61,7 @@ final parameters. Undefined component overlaps or nonfinite clustering results
 stop analysis before tree inference.
 
 ```
-usage: ci-mist [-h] [-t TRAJECTORY] [-s TOPOLOGY] [-o OUTPUT_PREFIX] [--seed SEED]
+usage: ci-mist [-h] -t TRAJECTORY -s TOPOLOGY -o OUTPUT_PREFIX [--seed SEED]
                   [--min_mass MIN_MASS] [--prior {percs,haldane,jeffreys,laplace}]
                   [--residue-selection RESIDUE_SELECTION]
 

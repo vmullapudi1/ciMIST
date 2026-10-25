@@ -77,8 +77,9 @@ class ResidueSelection(unittest.TestCase):
                 self.assertEqual(data.residues, direct.residues)
                 np.testing.assert_array_equal(data.traj.xyz, trajectory.xyz)
                 np.testing.assert_array_equal(data.traj.time, trajectory.time)
-        self.assertEqual(fit.parse_args(["--residue-selection", selection]).residue_selection, selection)
-        self.assertIsNone(fit.parse_args([]).residue_selection)
+        inputs = ["-t", "trajectory.xtc", "-s", "topology.pdb", "-o", "run"]
+        self.assertEqual(fit.parse_args([*inputs, "--residue-selection", selection]).residue_selection, selection)
+        self.assertIsNone(fit.parse_args(inputs).residue_selection)
 
     def test_singleton_keeps_its_physical_feature_mask(self):
         trajectory = small_trajectory(solvent=True)

@@ -27,10 +27,11 @@ def read_flat_probabilities(group, shape):
 
 class HDF5Compression(unittest.TestCase):
     def test_cli_default_and_opt_out(self):
-        self.assertEqual(parse_args([]).hdf5_compression, "gzip")
-        self.assertEqual(parse_args(["--hdf5_compression", "none"]).hdf5_compression, "none")
+        inputs = ["-t", "trajectory.xtc", "-s", "topology.pdb", "-o", "run"]
+        self.assertEqual(parse_args(inputs).hdf5_compression, "gzip")
+        self.assertEqual(parse_args([*inputs, "--hdf5_compression", "none"]).hdf5_compression, "none")
         with self.assertRaises(SystemExit):
-            parse_args(["--hdf5_compression", "lossy"])
+            parse_args([*inputs, "--hdf5_compression", "lossy"])
 
     def test_special_values_and_unfiltered_types(self):
         arrays = {

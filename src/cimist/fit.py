@@ -27,17 +27,17 @@ def probability_mass(value):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
 
-    parser.add_argument("-t", "--trajectory", type=str,
+    parser.add_argument("-t", "--trajectory", type=str, required=True,
     help=f"""The path to the trajectory file,
 or to a directory that contains all trajectory files and nothing else.
 Note that if a directory is supplied, all files in that directory must be valid molecular
 dynamics trajectory files.""")
-    parser.add_argument("-s", "--topology", type=str,
+    parser.add_argument("-s", "--topology", type=str, required=True,
     help=f"""The path to the topology file.""")
     parser.add_argument("--residue-selection", default=None,
                         help="MDTraj selection of protein residue centers, e.g. 'chainid 0 and resSeq 10 to 30'. chainid and resid are zero-based original topology indices; resSeq is the input residue number. Default: all supported protein residues. Covalent context and every frame are retained.")
     
-    parser.add_argument("-o", "--output_prefix", 
+    parser.add_argument("-o", "--output_prefix", required=True,
     help=f"""The prefix for the output directory.""")
     parser.add_argument("--seed", type=int, default=0,
     help="The random number generator seed, default 0.")

@@ -15,14 +15,17 @@ from cimist.io import save_tree_h5, load_h5_tree
 from cimist.sparse_probability import SparseProbability, dense_probability
 
 
+INPUT_ARGS = ["-t", "trajectory.xtc", "-s", "topology.pdb", "-o", "run"]
+
+
 class CLIDefaults(unittest.TestCase):
     def test_benchmarked_defaults_and_overrides(self):
-        args = parse_args([])
+        args = parse_args(INPUT_ARGS)
         self.assertEqual(args.VMM_BATCH_SIZE, None)
         self.assertEqual(args.PAIR_BATCH_SIZE, 2048)
         self.assertEqual(args.probability_storage, "sparse")
         self.assertEqual(args.hdf5_compression, "gzip")
-        override = parse_args(["--VMM_BATCH_SIZE", "100", "--PAIR_BATCH_SIZE", "999",
+        override = parse_args([*INPUT_ARGS, "--VMM_BATCH_SIZE", "100", "--PAIR_BATCH_SIZE", "999",
                                "--probability_storage", "dense", "--hdf5_compression", "none"])
         self.assertEqual((override.VMM_BATCH_SIZE, override.PAIR_BATCH_SIZE,
                           override.probability_storage, override.hdf5_compression),
@@ -36,7 +39,7 @@ class CLIDefaults(unittest.TestCase):
                                  n_states=jnp.full(3, 2))
         trees = []
         for argv in ([], ["--probability_storage", "dense"]):
-            args = parse_args(argv)
+            args = parse_args([*INPUT_ARGS, *argv])
             trees.append(MIST.from_residue_states(states, ["A", "B", "C"],
                 entropy_estimator="mle", uncertainty=False,
                 pair_batch_size=args.PAIR_BATCH_SIZE, probability_storage=args.probability_storage))

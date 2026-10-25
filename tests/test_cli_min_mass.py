@@ -22,14 +22,15 @@ class ReachedTree(Exception):
 
 class CLIMinMass(unittest.TestCase):
     def test_probability_mass_bounds(self):
-        self.assertEqual(fit.parse_args([]).min_mass, .01)
+        inputs = ["-t", "trajectory.xtc", "-s", "topology.pdb", "-o", "run"]
+        self.assertEqual(fit.parse_args(inputs).min_mass, .01)
         for value in ("0", "0.01", "0.1", "1"):
             with self.subTest(value=value):
-                self.assertEqual(fit.parse_args([f"--min_mass={value}"]).min_mass, float(value))
+                self.assertEqual(fit.parse_args([*inputs, f"--min_mass={value}"]).min_mass, float(value))
         for value in ("nan", "inf", "-inf", "-0.001", "1.001", "invalid"):
             with self.subTest(value=value), redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
-                    fit.parse_args([f"--min_mass={value}"])
+                    fit.parse_args([*inputs, f"--min_mass={value}"])
                 self.assertEqual(error.exception.code, 2)
 
     def run_to_tree(self, argv):
@@ -52,7 +53,8 @@ class CLIMinMass(unittest.TestCase):
         data.traj.__len__ = Mock(return_value=20)
         tree_builder = Mock(side_effect=ReachedTree)
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
-            stack.enter_context(patch("sys.argv", ["ci-mist", "-o", str(Path(folder) / "run"), *argv]))
+            stack.enter_context(patch("sys.argv", ["ci-mist", "-t", "trajectory.xtc", "-s", "topology.pdb",
+                                                   "-o", str(Path(folder) / "run"), *argv]))
             stack.enter_context(patch.object(fit, "load_dataset", return_value=data))
             stack.enter_context(patch.object(fit, "vmap", return_value=Mock(return_value=initial)))
             stack.enter_context(patch.object(vmm, "update_r", side_effect=lambda theta, state: state))

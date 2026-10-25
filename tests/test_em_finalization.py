@@ -70,7 +70,8 @@ class EMFinalization(unittest.TestCase):
             protein_residue_indices=[0, 1])
         data.traj.__len__ = Mock(return_value=7)
         with tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
-            args = fit.parse_args(["-o", str(Path(folder) / "run"),
+            args = fit.parse_args(["-t", "trajectory.xtc", "-s", "topology.pdb",
+                                   "-o", str(Path(folder) / "run"),
                                    "--solver", solver, "--VMM_BATCH_SIZE", "1"])
             stack.enter_context(patch.object(fit, "parse_args", return_value=args))
             stack.enter_context(patch.object(fit, "load_dataset", return_value=data))
