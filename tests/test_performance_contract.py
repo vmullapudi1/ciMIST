@@ -1,4 +1,4 @@
-"""Regression checks for deletion forests and bounded sparse export."""
+"""Portable checks for exact tree reconstruction and sparse export."""
 from pathlib import Path
 import tempfile
 import unittest

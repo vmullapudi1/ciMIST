@@ -144,9 +144,17 @@ Python save functions accept `compression=None`. Existing HDF5 readers work
 without changes.
 
 
-### Memory defaults
+### Fitting and memory options
 
-The `ci-mist` CLI defaults to sparse probability storage, pair batches of 128,
-and EM batches covering 8 residues. Run normally to use these settings;
-opt into dense arrays/pickles with `--probability_storage dense`.
-Load default sparse pickles with `cimist.io.load_sparse_tree(stream)`.
+The CLI defaults to the safeguarded Newton solver, EM batches of 32 residues,
+pair batches of 128, and exact sparse probability storage. Use `--VMM_BATCH_SIZE`
+and `--PAIR_BATCH_SIZE` to adjust temporary memory use; all trajectory frames
+and residue pairs are retained. Select `--probability_storage dense` for legacy
+dense arrays/pickles. Load default sparse pickles with
+`cimist.io.load_sparse_tree(stream)`.
+
+`--solver bfgs` selects the original bounded concentration objective and optimizer.
+Newton solves the same bounded M-step more tightly and can change fitted states
+and scientific outputs. For either solver, convergence uses the latest two
+post-update mean log-likelihoods. A run that has not converged within 100 EM
+updates stops before clustering or scientific export.

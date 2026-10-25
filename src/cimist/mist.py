@@ -50,10 +50,10 @@ class MIST:
     @staticmethod
     def from_residue_states(residue_states: ResidueStates, names: List[float],
     entropy_estimator="bayes",
-    prior: str="haldane", uncertainty: bool=True, *, pair_batch_size: Optional[int]=None, probability_storage: str="dense"):
+    prior: str="haldane", uncertainty: bool=True, *, pair_batch_size: Optional[int]=128, probability_storage: str="dense"):
         """
         Determine the maximum information (maximum likeihood) spanning tree from residue states.
-        pair_batch_size=None preserves the full pair map. Sparse storage requires an explicit positive batch size.
+        pair_batch_size defaults to 128 as in the Newton/jackknife parent; None uses full vmap. Sparse storage requires a positive batch size.
         """
 
         if pair_batch_size is not None and (
