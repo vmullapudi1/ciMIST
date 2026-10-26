@@ -1,0 +1,35 @@
+NeRFax source bundled with ciMIST
+===============================
+
+This directory contains a locally modified copy of NeRFax:
+https://github.com/PeptoneLtd/nerfax
+
+The upstream source is distributed under the Apache License, Version 2.0.
+The license text is retained in ciMIST's root LICENSE and included with its
+source and wheel distributions. This notice describes ciMIST modifications;
+it does not change the license terms or imply upstream endorsement.
+
+The changes below are described relative to upstream reference
+8d04e1a919c7a86ad9372917b12de3991a117cbe, also cited by ciMIST's trajectory
+converter. The original vendoring revision was not recorded. That reference
+contains no upstream NOTICE file.
+
+Files modified for ciMIST:
+
+- parser.py: topology-aware residue and atom mapping; supported-residue,
+  atom and bond validation; selection with intact covalent context; physical
+  feature masks; periodic imaging and batched geometry; trajectory loader
+  and scaffold adaptations.
+- plugin.py: package-relative reconstruction import; initialization of
+  reconstruction-only ghost references; rejection of unsupported
+  reconstruction geometries.
+- reconstruct.py: package-relative callback import; public jax.Device import
+  and jax.tree_util.tree_map compatibility updates.
+- utils.py: package-relative reconstruction import.
+
+In addition, ../trajectory.py adapts the converter from upstream plugin.py:
+it retains ciMIST's bond-angle convention instead of applying the upstream
+pi-minus-angle conversion, and integrates it with trajectory extraction
+and reconstruction.
+
+Existing source credits to EleutherAI/mp_nerf and Google JAX are retained.

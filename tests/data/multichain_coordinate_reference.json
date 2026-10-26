@@ -1,0 +1,25 @@
+{
+  "captured_utc": "2026-10-21",
+  "baseline_commit": "9f30db090f356131dbcf7103e9311f2b46f10151",
+  "seed": 7620,
+  "source_sha256": {
+    "src/cimist/utils/trajectory.py": "4125cc72be61a71f0c251010b1ab9053019b8966a42aa8f99aaac98edf37d673",
+    "src/cimist/utils/nerfax/parser.py": "86a395135de3dc98a6897d11d90071e4a15241c37cdb73c987b9070946e43ea3",
+    "src/cimist/utils/topology.py": "a42c3dbe677561871dcffcd44564ab331007b51261b8a272ebbc54e7fce36fd2",
+    "tests/test_multichain_coordinates.py": "c64c3d3584a40dbd5d173b113236838a01ae86f1b48769289a199febb3982bec"
+  },
+  "legacy_to_single_chain_function_sha256": "049ee63bba7e38935856826288871ce5dca93dead58fa7b423c8d88192de0e69",
+  "fixture_sha256": "12d132fb521db6ec30e9074fb07252d71ec580863ce05ce4a99b8e8b6a303879",
+  "versions": {
+    "python": "3.10.19",
+    "numpy": "1.26.4",
+    "mdtraj": "1.10.3",
+    "jax": "0.4.38"
+  },
+  "legacy_call": "flatten_masks(traj_to_internal(to_single_chain(small_trajectory(chain_lengths=(4,)))[0]))",
+  "physical_calls": [
+    "protein_angular_features(small_trajectory(chain_lengths=(4,)))",
+    "protein_angular_features(small_trajectory())"
+  ],
+  "scope": "Frozen pre-refactor legacy and physical-prototype outputs. Compare legacy only where physical_single_mask is true. Input xyz stored to make input identity independently checkable. Captured before parser/trajectory consolidation; tests must not regenerate expected arrays from the implementation under test."
+}

@@ -490,7 +490,8 @@ NEW_PALETTES = {
 import json
 import os
 
-SPECTRA_DIR = os.path.dirname(os.path.realpath(__file__))
+# PyMOL's default run namespace retains pymol.__file__; __script__ is this file.
+SPECTRA_DIR = os.path.dirname(os.path.realpath(globals().get('__script__', __file__)))
 
 with open(f"{SPECTRA_DIR}/cmocean.json", "r") as f:
     _d = json.load(f)

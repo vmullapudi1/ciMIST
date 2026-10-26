@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified from NeRFax for ciMIST: imports and reconstruction references/guards.
+# See NOTICE in this directory for the upstream reference and local changes.
+
 from functools import partial
 from jax import random, numpy as jnp, vmap, jit, grad
 import jax
@@ -30,6 +34,10 @@ convert_scnet_to_natural = partial(converter, roll=1)
 convert_natural_to_scnet = partial(converter, roll=-1)
 
 def protein_fold(cloud_mask, point_ref_mask, angles_mask, bond_mask, only_backbone=False, reconstruct_fn=reconstruct_from_internal_coordinates):
+    # These ghost references set only the rigid pose, never physical features.
+    bond_mask = jnp.asarray(bond_mask).at[0, 0].set(1.0)
+    angles_mask = jnp.asarray(angles_mask).at[0, 0, :2].set(1.0)
+    angles_mask = angles_mask.at[1, 0, :3].set(0.0)
     bb_coords = reconstruct_fn(bond_mask[...,:3], *angles_mask[...,:3]).reshape(-1,3,3)
     if only_backbone: return bb_coords;
     n = bb_coords.shape[0]
@@ -75,6 +83,8 @@ def get_jax_protein_fold(scaffolds, only_backbone=False, reconstruct_fn=reconstr
         jit-compiled op converting internal->cartesian coords
         for that specific protein
     '''
+    if not scaffolds.get("reconstruction_supported", True):
+        raise ValueError("Internal-coordinate reconstruction requires one complete connected chain with at least two residues and no external covalent context")
     cloud_mask, point_ref_mask= [jnp.array(x.cpu() if isinstance(x, torch.Tensor) else x) for x in map(scaffolds.__getitem__, ['cloud_mask', 'point_ref_mask'])]
     def _fold(angles_mask, bond_mask, only_backbone=only_backbone):
         with jax.ensure_compile_time_eval():

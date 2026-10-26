@@ -5,6 +5,8 @@ using density overlap.
 
 import jax.numpy as jnp
 import jax
+import numpy as np
+from jax.experimental import checkify
 from jax.scipy.special import entr
 from typing import NamedTuple, Optional
 from jax import Array, jit, vmap
@@ -91,11 +93,104 @@ def neighborhood_matrix(D: Array, eps: ArrayLike) -> Array:
     A = 1 - jnp.heaviside(D - eps, 0)
     return A
 
-def compute_distances(mixture: MixtureFitState) -> Array:
-    cross_counts = vmap(lambda x: jnp.sqrt(x).T @ jnp.sqrt(x))(mixture.r)
-    normalize_cross_counts = lambda x: jnp.sqrt(jnp.diag(1/jnp.diag(x)))@x@jnp.sqrt(jnp.diag(1/jnp.diag(x)))
-    cosine_distances = 1 - vmap(normalize_cross_counts)(cross_counts)
-    return cosine_distances
+
+def _require_checks(checks, messages):
+    """Synchronize only validation flags; traced callers can use checkify."""
+    if isinstance(checks, jax.core.Tracer):
+        for condition, message in zip(checks, messages):
+            checkify.debug_check(condition, message)
+    else:
+        for condition, message in zip(np.asarray(checks), messages):
+            if not condition:
+                raise ValueError(message)
+
+
+_RESPONSIBILITY_ERRORS = (
+    "Responsibilities must be finite before computing S2 overlap or DBSCAN.",
+    "Responsibilities must be nonnegative before computing S2 overlap or DBSCAN.",
+    "S2 overlap is undefined: a mixture component has zero or nonfinite total "
+    "responsibility. No conformational states were inferred; components cannot "
+    "be silently dropped or assigned an arbitrary overlap.",
+    "Each observation must have positive total responsibility before DBSCAN.",
+)
+
+
+@jit
+def _responsibility_checks(r):
+    masses = r.sum(axis=-2)
+    return jnp.array([
+        jnp.all(jnp.isfinite(r)),
+        jnp.all(r >= 0),
+        jnp.all(jnp.isfinite(masses) & (masses > 0)),
+        jnp.all(r.sum(axis=-1) > 0),
+    ])
+
+
+@jit
+def _clustering_checks(D, weights, r, eps):
+    return jnp.concatenate((_responsibility_checks(r), jnp.array([
+        jnp.all(jnp.isfinite(D)),
+        jnp.all(jnp.isfinite(weights) & (weights >= 0)),
+        jnp.all(weights.sum(axis=-1) > 0),
+        jnp.all(jnp.isfinite(eps)),
+    ])))
+
+
+_CLUSTERING_ERRORS = _RESPONSIBILITY_ERRORS + (
+    "S2 overlap distances must be finite before DBSCAN.",
+    "Mixture weights must be finite and nonnegative before DBSCAN.",
+    "Mixture weights must have positive total mass before DBSCAN.",
+    "DBSCAN epsilon must be finite before inferring conformational states.",
+)
+
+
+def validate_clustering_inputs(D, weights, r, k=1):
+    """Validate one residue or a batch before transformed DBSCAN kernels.
+
+    Only a small vector of validation flags is copied to the host. Call this
+    outside jit/vmap to raise ValueError before clustering. Inside transforms,
+    checks require ``checkify.checkify``; ordinary jit does not raise them.
+    """
+    rows, columns = jnp.triu_indices(D.shape[-1])
+    eps = 1 - k * jnp.std(D[..., rows, columns], axis=-1)
+    _require_checks(_clustering_checks(D, weights, r, eps), _CLUSTERING_ERRORS)
+
+
+@jit
+def _clustering_result_checks(states):
+    fields = (states.S_mle, states.S_se, states.dbscan_S, states.dbscan_p,
+              states.dbscan_eps, states.C_dbscan)
+    finite = jnp.all(jnp.stack([jnp.all(jnp.isfinite(x)) for x in fields
+                                if x is not None]))
+    return jnp.array([finite, jnp.all(states.dbscan_p.sum(axis=-1) > 0)])
+
+
+def validate_clustering_result(states):
+    """Reject numerical failures before conformational states reach the tree."""
+    _require_checks(_clustering_result_checks(states), (
+        "DBSCAN produced nonfinite conformational-state quantities; tree inference stopped.",
+        "DBSCAN produced zero conformational-state probability mass; tree inference stopped.",
+    ))
+
+
+def compute_distances(mixture: MixtureFitState, batch_size=None) -> Array:
+    """Compute S2 distances after checking positive component masses.
+
+    Call outside jit to reject undefined overlaps before division. Transformed
+    callers must use checkify.checkify to enable the same validation.
+    """
+    _require_checks(_responsibility_checks(mixture.r), _RESPONSIBILITY_ERRORS)
+
+    def per_residue(r):
+        cross_counts = jnp.sqrt(r).T @ jnp.sqrt(r)
+        normalizer = jnp.sqrt(jnp.diag(1 / jnp.diag(cross_counts)))
+        return 1 - normalizer @ cross_counts @ normalizer
+
+    distances = cvmap(per_residue, chunk_size=batch_size)(mixture.r)
+    _require_checks(jnp.array([jnp.all(jnp.isfinite(distances))]), (
+        "S2 overlap normalization produced nonfinite distances; DBSCAN was not run.",
+    ))
+    return distances
 
 def matrix_dbscan(D: Array, weights: Array, r: Array, eps: ArrayLike,
                   min_probability_mass: ArrayLike,
@@ -118,6 +213,8 @@ def matrix_dbscan(D: Array, weights: Array, r: Array, eps: ArrayLike,
     -------
     CoarseGraining
     """
+    # Concrete calls fail early; transformed kernels require checked inputs.
+    _require_checks(_clustering_checks(D, weights, r, eps), _CLUSTERING_ERRORS)
     
     # Identify core points using the neighborhood density
     N = neighborhood_matrix(D, eps)
@@ -230,6 +327,10 @@ def dbscan_eps_std(D: Array, weights: Array, r: Array,
     """
     Apply DBSCAN to the distance matrix D with the eps parameter
     set as one minus the standard deviation of the distances.
+
+    Concrete calls validate inputs. Before jit/vmap, use
+    validate_clustering_inputs, or apply checkify.checkify to the transformed
+    function to retain runtime checks without host callbacks.
     """
     eps = 1 - k*jnp.std(D[jnp.triu_indices_from(D)])
     dbs = matrix_dbscan(D, weights, r, eps, min_probability_mass)

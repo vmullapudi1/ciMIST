@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified from NeRFax for ciMIST: package-relative reconstruction import.
+# See NOTICE in this directory for the upstream reference and local changes.
+
 from .reconstruct import get_axis_matrix
 from jax import numpy as jnp
 

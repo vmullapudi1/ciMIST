@@ -1,4 +1,5 @@
 from heapq import merge
+from copy import deepcopy
 import math
 from networkx.utils import UnionFind
 #!/usr/bin/env python3
@@ -17,7 +18,7 @@ import cmocean as cmo
 import mdtraj as md
 
 
-from itertools import combinations
+from itertools import combinations, islice
 from functools import reduce
 from typing import List, Optional, NamedTuple, Union
 
@@ -66,6 +67,8 @@ class MIST:
             raise ValueError("probability_storage must be dense or sparse")
         if probability_storage == "sparse" and pair_batch_size is None:
             raise ValueError("Sparse storage requires an explicit positive pair_batch_size")
+        if not len(names):
+            raise ValueError("Residue selection must not be empty")
 
         states = residue_states.states_traj
         matrix_size = int(jnp.max(states)+1)
@@ -73,14 +76,9 @@ class MIST:
         counts_array_size = matrix_size**2
         
         def pairwise_interaction(s1: Array, s2: Array):
-            init_matrix = jnp.empty((matrix_size+1, matrix_size+1))
-            state_pairs = jnp.stack([s1, s2])
-            pair_counts = jnp.unique(state_pairs,
-                                    axis=1, return_counts=True,
-                                    size=counts_array_size,
-                                    fill_value=-1)
-            counts_matrix = init_matrix.at[pair_counts[0][0],pair_counts[0][1]].set(pair_counts[1])
-            counts_matrix = counts_matrix[:-1,:-1] # drop the row and column we added to account for -1 fill value
+            encoded = s1.astype(jnp.result_type(int)) * matrix_size + s2.astype(jnp.result_type(int))
+            counts_matrix = jnp.bincount(encoded, length=counts_array_size).reshape(matrix_size, matrix_size)
+            counts_matrix = counts_matrix.astype(jnp.result_type(float))
             P = counts_matrix / counts_matrix.sum()
 
             S_uv = ee.S_mle(P.flatten())
@@ -91,29 +89,27 @@ class MIST:
             return ResidueInteraction(S_uv, S_u, S_v, I_uv, P, S_uv_pos_mean, S_uv_pos_se)
         
         pairwise_interaction_ = jit(pairwise_interaction)
-        host_pairs = list(combinations(list(range(len(names))), 2))
+        host_pairs = combinations(range(len(names)), 2)
         pair_function = lambda x: pairwise_interaction_(states[x[0]], states[x[1]])
-        if probability_storage == "dense":
-            pairs = jnp.asarray(host_pairs)
+        if len(names) == 1:
+            edge_records = ()
+        elif probability_storage == "dense":
+            pairs = jnp.asarray(list(host_pairs))
             name_pairs = [(names[i], names[j]) for (i,j) in pairs]
             compute_pairs = (vmap(pair_function) if pair_batch_size is None else
                              cvmap(pair_function, chunk_size=pair_batch_size))
             interactions = compute_pairs(pairs)
-            edge_records = zip(name_pairs, interactions.I_uv, interactions.P_uv,
-                               interactions.S_uv_pos_mean, interactions.S_uv_se)
+            edge_records = zip(name_pairs, interactions.I_uv, interactions.P_uv)
         else:
             def sparse_records():
                 # Never concatenate probability batches or retain a dense graph.
                 compute_batch = vmap(pair_function)
-                for start in range(0, len(host_pairs), pair_batch_size):
-                    batch_pairs = host_pairs[start:start + pair_batch_size]
-                    batch = compute_batch(jnp.asarray(batch_pairs))
-                    host_probabilities = np.asarray(batch.P_uv)
+                while batch_pairs := list(islice(host_pairs, pair_batch_size)):
+                    batch = jax.device_get(compute_batch(jnp.asarray(batch_pairs)))
                     for index, (i, j) in enumerate(batch_pairs):
                         yield ((names[i], names[j]), batch.I_uv[index],
-                               SparseProbability.encode(host_probabilities[index]),
-                               batch.S_uv_pos_mean[index], batch.S_uv_se[index])
-                    del host_probabilities, batch
+                               SparseProbability.encode(batch.P_uv[index]))
+                    del batch
             edge_records = sparse_records()
     
         MI_graph = nx.Graph()
@@ -121,6 +117,11 @@ class MIST:
                 names, residue_states.state_counts, residue_states.n_states
                 ):
             p = ctz/ctz.sum()
+            if len(names) == 1:
+                # DBSCAN counts are compact; singleton nodes have no edge
+                # marginal to restore the original (possibly gappy) labels.
+                counts = jnp.bincount(states[0].astype(jnp.result_type(int)), length=matrix_size)
+                p = counts / counts.sum()
 
 
             S_pos_mean, S_std = jnp.nan, jnp.nan
@@ -128,21 +129,11 @@ class MIST:
             S_mle = ee.S_mle(p)
             bias = S_mle - S_pos_mean
             S_se = S_std
-            MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=ctz/ctz.sum(), N_states=K)
+            MI_graph.add_node(u, S=float(S_mle), S_pos_mean=S_pos_mean, S_se=S_se, p=p, N_states=K)
 
-        for ((u,v), I, P, S_uv, S_se_uv) in edge_records:
-
-            S_u, S_v = MI_graph.nodes[u]["S_pos_mean"], MI_graph.nodes[v]["S_pos_mean"]
-
-            S_u_se, S_v_se = MI_graph.nodes[u]["S_se"],  MI_graph.nodes[v]["S_se"]
-            I_uv_pos_mean = S_u + S_v - S_uv
-    
-    
-    
-            bias = I - I_uv_pos_mean
-            variance = S_se_uv**2 + S_u_se**2 + S_v_se**2 
-            I_se = jnp.sqrt(variance)
-            MI_graph.add_edge(u, v, P=P, I=float(I), axes=(u,v), I_pos_mean=I_uv_pos_mean, I_se=I_se)
+        for ((u,v), I, P) in edge_records:
+            # Posteriors are calculated after tree fitting; every initial value is NaN.
+            MI_graph.add_edge(u, v, P=P, I=float(I), axes=(u,v), I_pos_mean=np.nan, I_se=np.nan)
         
 
     
@@ -291,59 +282,126 @@ class MIST:
         return self.sum_marginal_entropy() - self.sum_MIs()
     
     def information_matrix(self, resis=None, kind="empirical", diag=False):
+        """Return pairwise information in nats, in canonical parent node order.
+
+        ``resis`` filters node labels without refitting the model. ``empirical``
+        uses observed pair probabilities; ``chow_liu`` uses marginals implied
+        by the current tree, including paths through unselected nodes. ``hybrid``
+        places empirical values above and tree-implied values below the diagonal.
+        Both are plug-in estimates, independent of ``entropy_estimator``; posterior
+        tree estimates remain available through ``tree_MIs`` and ``residue_entropies``.
+        Missing empirical pairs are NaN. For a disconnected tree (forest),
+        tree-implied MI is zero across components: the model treats components
+        as independent, which does not establish empirical independence.
+        With ``diag=True``, the diagonal contains empirical marginal entropies;
+        otherwise it is zero. Empty, duplicate or unknown selections raise ValueError.
         """
-        
-
-        Parameters
-        ----------
-        resis : TYPE, optional
-            DESCRIPTION. The default is None.
-        kind : string, optional
-            The default is "hybrid". Options are "hybrid", "empirical", and "chow_liu".
-        diag : bool, optional
-            Whether to plot the entropies (self-informations) on the diagonal. The default is False.
-
-        Raises
-        ------
-        Exception
-            DESCRIPTION.
-
-        Returns
-        -------
-        TYPE
-            DESCRIPTION.
-
-        """
+        resis = None if resis is None else list(resis)
         if kind == "hybrid":
             udag = np.triu(self.empirical_information_matrix(resis=resis, diag=diag))
-            ldag = np.tril(self.chow_liu_information_matrix(resis=resis, diag=False))
+            ldag = np.tril(self.chow_liu_information_matrix(resis=resis, diag=False), k=-1)
             return udag + ldag
         elif kind == "chow_liu":
             return self.chow_liu_information_matrix(resis=resis, diag=diag)
         elif kind == "empirical":
             return self.empirical_information_matrix(resis=resis, diag=diag)
         else:
-            raise Exception("argument kind must be 'hybrid', 'chow_liu' , or 'empirical'.")
+            raise ValueError("argument kind must be 'hybrid', 'chow_liu' , or 'empirical'.")
 
-    def empirical_information_matrix(self):
-        return np.array(nx.adjacency_matrix(self.MI_graph, weight=self._I_key).todense())
+    def empirical_information_matrix(self, resis=None, diag=False):
+        """Return observed plug-in MI (and optional marginal entropy) in nats.
+
+        An absent empirical pair is NaN, distinct from measured zero MI.
+        An existing edge without its required I field remains an error.
+        """
+        selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
+        matrix = np.zeros((len(selected), len(selected)), dtype=float)
+        for i, u in enumerate(selected):
+            if diag:
+                matrix[i, i] = self.MI_graph.nodes[u]["S"]
+            for j in range(i + 1, len(selected)):
+                edge = self.MI_graph.get_edge_data(u, selected[j])
+                matrix[i, j] = matrix[j, i] = np.nan if edge is None else edge["I"]
+        return matrix
     
-    def chow_liu_information_matrix(self):
-        return np.array(nx.adjacency_matrix(self.MI_graph, weight="I_CL").todense())
+    def chow_liu_information_matrix(self, resis=None, diag=False):
+        """Return current-tree plug-in MI without retaining pairwise joint caches.
+
+        Only requested pairs are evaluated. Each temporary joint distribution
+        is discarded after its entropy is calculated; existing I_CL/P_CL fields
+        are unused because they may describe a different tree or edge knockout.
+        A forest represents a product of its component distributions, extending
+        paper Eq. 1. Cross-component MI is exactly zero under that model; this
+        is an independence assumption, not an empirical estimate.
+        """
+        selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
+        matrix = np.zeros((len(selected), len(selected)), dtype=float)
+        components = {node: index for index, nodes in enumerate(nx.connected_components(self.T))
+                      for node in nodes}
+        for i, u in enumerate(selected):
+            if diag:
+                matrix[i, i] = self.nodes[u]["S"]
+            for j in range(i + 1, len(selected)):
+                v = selected[j]
+                if components[u] != components[v]:
+                    continue
+                joint_entropy = float(ee.S_mle(joint_distribution(self, u, v)))
+                matrix[i, j] = matrix[j, i] = self.nodes[u]["S"] + self.nodes[v]["S"] - joint_entropy
+        return matrix
     
     def tree_MIs(self):
         return pd.Series([self.T.edges[e][self._I_key] for e in self.T.edges()], index=self.T.edges())
     
+    def _selected_nodes(self, nodelist):
+        requested = list(nodelist)
+        if not requested:
+            raise ValueError("Residue selection must not be empty")
+        selected = set(requested)
+        if len(selected) != len(requested):
+            raise ValueError("Residue selection contains duplicate node labels")
+        unknown = [node for node in requested if node not in self.MI_graph]
+        if unknown:
+            raise ValueError(f"Unknown residue node labels: {unknown!r}")
+        return [node for node in self.MI_graph if node in selected]
+
     def trim(self, nodelist):
-        paths = [list(nx.utils.pairwise(nx.shortest_path(self.T, u, v))) for (u,v) in combinations(nodelist, 2)]
-        return self.T.edge_subgraph(reduce(lambda x,y: list(set(x+y)), paths))
+        """Return a display graph retaining selected nodes and connecting paths.
+
+        Excluded connector nodes retain their full-model statistics. Stored
+        contributions use all neighbors in the original tree (paper Eq. 3),
+        so their selected sum is not a selected-subsystem entropy.
+        """
+        ordered_selection = self._selected_nodes(nodelist)
+        selected = set(ordered_selection)
+        view = self.T.copy()
+        leaves = [node for node in view if node not in selected and view.degree[node] <= 1]
+        while leaves:
+            node = leaves.pop()
+            if node not in view:
+                continue
+            neighbors = list(view[node])
+            view.remove_node(node)
+            leaves.extend(neighbor for neighbor in neighbors
+                          if neighbor not in selected and view.degree[neighbor] <= 1)
+        contributions = self.residue_entropies() - 0.5 * self.residue_sum_MIs()
+        view.graph["view_kind"] = "full_tree_paths"
+        if "residue_selection" in view.graph:
+            view.graph["residue_selection"] = deepcopy(view.graph["residue_selection"])
+        view.graph["focus_selection"] = dict(semantics="display_only", nodes=ordered_selection)
+        if all("residue_index" in view.nodes[node] for node in ordered_selection):
+            view.graph["focus_selection"]["residue_indices"] = [
+                view.nodes[node]["residue_index"] for node in ordered_selection]
+        for node in view:
+            view.nodes[node]["is_selected"] = node in selected
+            view.nodes[node]["full_model_entropy_contribution"] = float(contributions[node])
+        return view
     
     def to_pymol(self, protein_structure: md.Trajectory, path : str,
                 edge_cmap="turbid", edge_vmin=0, edge_vmax=1, min_MI=0.0,
                 node_cmap="algae", node_vmin=0, node_vmax=3.5, 
                 entropy_decay_factor=1, base_stick_radius=1, base_sphere_radius=1, 
                 min_stick_radius=0.1,
-                cbar_figsize=(3,1)
+                cbar_figsize=(3,1), *, focus_nodes=None
                 ):
         """
         Create files for visualization of the tree in PyMOL.
@@ -360,6 +418,10 @@ class MIST:
         and 'colorbar.png'. The tree is visualized by opening PyMOL and running
         draw_tree.pml.
 
+        ``focus_nodes`` optionally selects full-tree paths for display, retaining
+        excluded connector residues. This writes focus.json with full-model
+        Eq. 3 entropy allocations; it does not infer a marginal subsystem.
+
         Notes
         -----
         Available colormaps are those in the Python libraries cmasher and cmocean.
@@ -375,7 +437,8 @@ class MIST:
                 node_cmap=node_cmap, node_vmin=node_vmin, node_vmax=node_vmax,
                 cbar_figsize=cbar_figsize, min_MI=min_MI,
                 base_stick_radius=base_stick_radius, base_sphere_radius=base_sphere_radius,
-                entropy_decay_factor=entropy_decay_factor, min_stick_radius=min_stick_radius)
+                entropy_decay_factor=entropy_decay_factor, min_stick_radius=min_stick_radius,
+                focus_nodes=focus_nodes)
         print(f"Wrote files for PyMOL visualization to directory {path}.", flush=True)
 
     def _compute_implied_pairwise_marginals(self):
@@ -394,15 +457,65 @@ class MIST:
             self.MI_graph[u][v]["I_CL"] = H_u + H_v - H_uv
         return None
 
-    def refit_to_subset(self, nodelist, uncertainty=False):
-        MI = self.MI_graph.subgraph(nodelist)
-        return MIST(MI, uncertainty=uncertainty)
+    def refit_to_subset(self, nodelist, uncertainty=None):
+        """Infer a new MIST from all empirical pairs of selected residues.
+
+        This estimates the selected marginal subsystem, not a conditional
+        distribution or a trimmed full-tree view. Residue states, probabilities,
+        sample count, prior and estimator are retained. Uncertainty defaults to
+        the parent's setting and is recomputed for the selected system.
+        Every selected empirical pair must be available with P, I and axes;
+        missing pairs raise ValueError rather than implying independence.
+        """
+        selected = self._selected_nodes(nodelist)
+        for u, v in combinations(selected, 2):
+            edge = self.MI_graph.get_edge_data(u, v)
+            if edge is None:
+                raise ValueError(f"Missing empirical pair {(u, v)!r}; subset refitting requires all selected pairs")
+            if "P" not in edge or "I" not in edge or "axes" not in edge:
+                raise ValueError(f"Incomplete empirical pair {(u, v)!r}; subset refitting requires P, I and axes")
+        # Copy attribute dictionaries without copying large probability arrays.
+        MI = self.MI_graph.__class__()
+        MI.graph.update(self.MI_graph.graph)
+        MI.add_nodes_from((node, self.MI_graph.nodes[node]) for node in selected)
+        selected_set, seen = set(selected), set()
+        for node in selected:
+            MI.add_edges_from((node, neighbor, attrs)
+                              for neighbor, attrs in self.MI_graph[node].items()
+                              if neighbor in selected_set and neighbor not in seen)
+            seen.add(node)
+        if "residue_selection" in MI.graph:
+            selection = deepcopy(MI.graph["residue_selection"])
+            selection["refit_from"] = dict(expression=selection.get("expression"),
+                                          residue_indices=selection["residue_indices"])
+            selection.update(semantics="marginal", expression=None,
+                             residue_indices=[MI.nodes[node]["residue_index"] for node in selected])
+            MI.graph["residue_selection"] = selection
+        for _, attrs in MI.nodes(data=True):
+            for key in ("bias", "variance", "S_contribution_se"):
+                attrs.pop(key, None)
+            attrs.update(S_pos_mean=np.nan, S_se=np.nan)
+        for _, _, attrs in MI.edges(data=True):
+            for key in ("bias", "variance", "P_CL", "I_CL"):
+                attrs.pop(key, None)
+            attrs.update(I_pos_mean=np.nan, I_se=np.nan)
+        return MIST(MI, N_obs=self.N_obs, prior=self.prior,
+                    entropy_estimator=self.entropy_estimator,
+                    uncertainty=self.uncertainty if uncertainty is None else uncertainty)
 
     def update_prior(self, prior: str):
         return MIST(self.MI_graph, self.N_obs, prior=prior, uncertainty=True, update_posterior=True)
 
 def joint_distribution(T, u, v):
-    path_nodes = nx.shortest_path(T.T, source=u, target=v)
+    """Return the pair marginal implied by a tree or independent-component forest.
+
+    Across forest components, paper Eq. 1 extended to the forest factorizes
+    into the product of the two marginals. This is a model assumption.
+    """
+    try:
+        path_nodes = nx.shortest_path(T.T, source=u, target=v)
+    except nx.NetworkXNoPath:
+        return jnp.outer(T.nodes[u]["p"], T.nodes[v]["p"])
     path_edges = list(nx.utils.pairwise(path_nodes))
     
     def _transfer_matrix(T,u,v):
@@ -413,11 +526,15 @@ def joint_distribution(T, u, v):
             P_uv = dense_probability(T[u][v]["P"]).T
         else:
             raise Exception(f"Axes specification error, received edges {(u,v)} and got axes {axes}")
-        replace_inf_with_zero = lambda x: jnp.where(jnp.isinf(x), 0, x)
-        P_ui = jnp.diag(replace_inf_with_zero(1.0 / T.nodes[u]["p"]))
+        p = jnp.asarray(T.nodes[u]["p"])
+        # Unobserved state labels have zero transition rows.
+        inverse_p = jnp.where(p == 0, 0, 1.0 / jnp.where(p == 0, 1, p))
+        P_ui = jnp.diag(inverse_p)
         return jnp.dot(P_ui, P_uv)
     
     P_u = jnp.diag(T.nodes[u]["p"])
+    if not path_edges:
+        return P_u
     P_uv = jnp.linalg.multi_dot([P_u] + [_transfer_matrix(T.T,u,v) for (u,v) in path_edges])
     return P_uv
 
@@ -468,7 +585,7 @@ def get_log_prob_and_sampling_fns(tree, root=None):
     # children and forms a stack of transfer matrices in that order
     Paths = get_paths_to_leaves(tree, root)
     aggregate_paths = lambda p1, p2: p1 + [e for e in p2 if e not in p1]
-    edgelist = list(reduce(aggregate_paths, Paths)) 
+    edgelist = list(reduce(aggregate_paths, Paths, []))
     transfer_matrices = [transfer_matrix(tree.T, u, v) for (u,v) in edgelist] # transfer matrices
     
     # i gets the index of the edge in the product over conditional probabilities
@@ -478,6 +595,8 @@ def get_log_prob_and_sampling_fns(tree, root=None):
     @jit
     def log_prob_fn(barcode):
         root_term = root_log_p[barcode[root_ix]]
+        if not edge_ixs:
+            return root_term
         sum_couplings = jnp.sum(jnp.stack(
             [jnp.log(transfer_matrices[i][barcode[u], barcode[v]]) # barcode[u], barcode[v] gets the 
              for (i,u,v) in edge_ixs]))
@@ -594,21 +713,33 @@ def compute_all_MI_CL(tree, verbose=False):
     return tree
 
 def residue_pseudojackknife(tree):
-    prepared = _PresortedDeletionMST(tree.MI_graph, weight="I")
-    entropies = []
-    contributions = []
-    for n in tree.nodes():
-        other_nodes = [n_ for n_ in tree.MI_graph.nodes() if n_ != n]
-        G = nx.subgraph(tree.MI_graph, other_nodes)
-
-        # estimator="mle" ensures time is not spent re-computing posterior mean entropies
-        # with little effect on estimated variance
-        prefitted_tree, _ = prepared.tree_without(n)
-        tree_resamp = MIST(G, N_obs=tree.N_obs, tree=prefitted_tree, entropy_estimator="mle", calculate_marginals=False, uncertainty=False, prior=tree.prior)
-        
-        entropies.append(tree_resamp.entropy())
-        contributions.append(tree_resamp.residue_entropies() - 0.5*tree_resamp.residue_sum_MIs())
+    """Same deletion trees/reductions, with only final shared marginal writes."""
+    _validate_prior(tree.prior)
+    prepared = _PresortedDeletionMST(tree.MI_graph, weight='I')
+    entropies, contributions, final_marginals = [], [], {}
+    for removed in tree.nodes():
+        selected, _ = prepared.tree_without(removed)
+        for node in selected:
+            neighbor = next(iter(selected[node]), None)
+            if neighbor is not None:
+                edge = selected.edges[node, neighbor]
+                final_marginals[node] = edge['P'], edge['axes']
+        # Identical scalar/pandas operations from the MLE MIST methods.
+        residue_entropy = pd.Series(np.array([selected.nodes[n]['S'] for n in selected]),
+                                    index=list(selected))
+        residue_mi = pd.Series(dict(nx.degree(selected, weight='I')))
+        entropies.append(np.sum(residue_entropy) - selected.size(weight='I'))
+        contributions.append(residue_entropy - 0.5 * residue_mi)
+    # Deletion selection and summaries do not read p, but callers/pickles do.
+    for node, (probability, axes) in final_marginals.items():
+        probability = dense_probability(probability)
+        if node != axes[0]:
+            probability = probability.T
+        tree.MI_graph.nodes[node]['p'] = probability.sum(axis=1)
     contributions_df = pd.concat(contributions, axis=1).map(float)
+    if len(tree.T) == 1:
+        # Deleting the sole node leaves entropy zero and no retained contribution.
+        contributions_df = contributions_df.reindex(tree.resnames).astype(float)
     contribution_se = contributions_df.std(axis=1, skipna=True)
     return jnp.array(entropies), contributions_df, contribution_se
 
