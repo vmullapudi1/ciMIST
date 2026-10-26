@@ -290,6 +290,9 @@ class MIST:
         places empirical values above and tree-implied values below the diagonal.
         Both are plug-in estimates, independent of ``entropy_estimator``; posterior
         tree estimates remain available through ``tree_MIs`` and ``residue_entropies``.
+        Missing empirical pairs are NaN. For a disconnected tree (forest),
+        tree-implied MI is zero across components: the model treats components
+        as independent, which does not establish empirical independence.
         With ``diag=True``, the diagonal contains empirical marginal entropies;
         otherwise it is zero. Empty, duplicate or unknown selections raise ValueError.
         """
@@ -306,14 +309,19 @@ class MIST:
             raise ValueError("argument kind must be 'hybrid', 'chow_liu' , or 'empirical'.")
 
     def empirical_information_matrix(self, resis=None, diag=False):
-        """Return observed plug-in MI (and optional marginal entropy) in nats."""
+        """Return observed plug-in MI (and optional marginal entropy) in nats.
+
+        An absent empirical pair is NaN, distinct from measured zero MI.
+        An existing edge without its required I field remains an error.
+        """
         selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
         matrix = np.zeros((len(selected), len(selected)), dtype=float)
         for i, u in enumerate(selected):
             if diag:
                 matrix[i, i] = self.MI_graph.nodes[u]["S"]
             for j in range(i + 1, len(selected)):
-                matrix[i, j] = matrix[j, i] = self.MI_graph[u][selected[j]]["I"]
+                edge = self.MI_graph.get_edge_data(u, selected[j])
+                matrix[i, j] = matrix[j, i] = np.nan if edge is None else edge["I"]
         return matrix
     
     def chow_liu_information_matrix(self, resis=None, diag=False):
@@ -322,14 +330,21 @@ class MIST:
         Only requested pairs are evaluated. Each temporary joint distribution
         is discarded after its entropy is calculated; existing I_CL/P_CL fields
         are unused because they may describe a different tree or edge knockout.
+        A forest represents a product of its component distributions, extending
+        paper Eq. 1. Cross-component MI is exactly zero under that model; this
+        is an independence assumption, not an empirical estimate.
         """
         selected = list(self.MI_graph) if resis is None else self._selected_nodes(resis)
         matrix = np.zeros((len(selected), len(selected)), dtype=float)
+        components = {node: index for index, nodes in enumerate(nx.connected_components(self.T))
+                      for node in nodes}
         for i, u in enumerate(selected):
             if diag:
                 matrix[i, i] = self.nodes[u]["S"]
             for j in range(i + 1, len(selected)):
                 v = selected[j]
+                if components[u] != components[v]:
+                    continue
                 joint_entropy = float(ee.S_mle(joint_distribution(self, u, v)))
                 matrix[i, j] = matrix[j, i] = self.nodes[u]["S"] + self.nodes[v]["S"] - joint_entropy
         return matrix
@@ -449,8 +464,16 @@ class MIST:
         distribution or a trimmed full-tree view. Residue states, probabilities,
         sample count, prior and estimator are retained. Uncertainty defaults to
         the parent's setting and is recomputed for the selected system.
+        Every selected empirical pair must be available with P, I and axes;
+        missing pairs raise ValueError rather than implying independence.
         """
         selected = self._selected_nodes(nodelist)
+        for u, v in combinations(selected, 2):
+            edge = self.MI_graph.get_edge_data(u, v)
+            if edge is None:
+                raise ValueError(f"Missing empirical pair {(u, v)!r}; subset refitting requires all selected pairs")
+            if "P" not in edge or "I" not in edge or "axes" not in edge:
+                raise ValueError(f"Incomplete empirical pair {(u, v)!r}; subset refitting requires P, I and axes")
         # Copy attribute dictionaries without copying large probability arrays.
         MI = self.MI_graph.__class__()
         MI.graph.update(self.MI_graph.graph)
@@ -484,7 +507,15 @@ class MIST:
         return MIST(self.MI_graph, self.N_obs, prior=prior, uncertainty=True, update_posterior=True)
 
 def joint_distribution(T, u, v):
-    path_nodes = nx.shortest_path(T.T, source=u, target=v)
+    """Return the pair marginal implied by a tree or independent-component forest.
+
+    Across forest components, paper Eq. 1 extended to the forest factorizes
+    into the product of the two marginals. This is a model assumption.
+    """
+    try:
+        path_nodes = nx.shortest_path(T.T, source=u, target=v)
+    except nx.NetworkXNoPath:
+        return jnp.outer(T.nodes[u]["p"], T.nodes[v]["p"])
     path_edges = list(nx.utils.pairwise(path_nodes))
     
     def _transfer_matrix(T,u,v):

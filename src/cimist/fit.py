@@ -59,10 +59,10 @@ Note that of these options, only 'haldane' and 'percs' add the same total number
                         )
     parser.add_argument("--solver", choices=("newton", "bfgs"), default="newton",
                         help="Default: newton. Safeguarded scalar Newton solves the bounded M-step; bfgs uses the original clipped objective. Newton can change scientific outputs.")
-    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=None,
-                        help="Maximum residues per EM, responsibility, component-distance and DBSCAN batch. Default: all residues, for either solver. Must be positive; smaller batches reduce temporary memory without dropping frames. Initialization is unchanged.")
-    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=2048,
-                        help="Maximum residue pairs evaluated together; default: 2048. A value at least the pair count uses the original full map. All pairs and frames are retained.")
+    parser.add_argument("--VMM_BATCH_SIZE", type=positive_batch_size, default=32,
+                        help="Maximum residues per EM, responsibility, component-distance and DBSCAN batch. Default: 32, for either solver. Must be positive; smaller batches reduce temporary memory without dropping frames. A value at least the selected residue count uses the full map. Initialization is unchanged.")
+    parser.add_argument("--PAIR_BATCH_SIZE", type=positive_batch_size, default=128,
+                        help="Maximum residue pairs evaluated together; default: 128. A value at least the pair count uses the original full map. All pairs and frames are retained.")
     parser.add_argument("--probability_storage", choices=("dense", "sparse"), default="sparse", help="In-memory graph probabilities: sparse (default) reduces memory; dense uses arrays. Tree output is native sparse HDF5 in either mode.")
     parser.add_argument("--hdf5_compression", choices=("gzip", "none"), default="gzip",
                         help="HDF5 numeric arrays: lossless gzip level 1 + shuffle (default), or none.")

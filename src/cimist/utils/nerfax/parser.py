@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified from NeRFax for ciMIST: topology-aware extraction and validation.
+# See NOTICE in this directory for the upstream reference and local changes.
+
 import numpy as np
 import mdtraj as md
 from Bio.Data import IUPACData

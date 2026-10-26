@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified from NeRFax for ciMIST: imports and reconstruction references/guards.
+# See NOTICE in this directory for the upstream reference and local changes.
+
 from functools import partial
 from jax import random, numpy as jnp, vmap, jit, grad
 import jax

@@ -14,6 +14,7 @@ import numpy as np
 
 from cimist import mist
 from cimist.io import load_h5_tree, save_tree_h5
+from cimist.sparse_probability import SparseProbability
 
 
 NAMES = ["ALA1_A", "GLY2_A", "SER1_B"]
@@ -163,6 +164,86 @@ class InformationMatrix(unittest.TestCase):
             self.assertEqual(attrs["I_CL"], 42.)
             self.assertIs(attrs["P_CL"], cached)
         self.assertTrue(tree._implied_marginals_set)
+
+    def test_missing_empirical_pair_keeps_indirect_information_and_hybrid(self):
+        empirical, implied = expected_matrices()
+        empirical[0, 2] = empirical[2, 0] = np.nan
+        self.assertGreater(implied[0, 2], 0.)
+        for storage in ("dense", "sparse"):
+            tree = model(storage)
+            tree.MI_graph.remove_edge(NAMES[0], NAMES[2])
+            edges = list(tree.MI_graph.edges)
+            probabilities = {edge: tree.MI_graph.edges[edge]["P"] for edge in edges}
+            for selected in (None, NAMES[::2][::-1]):
+                indices = np.arange(3) if selected is None else np.array([0, 2])
+                for diag in (False, True):
+                    with self.subTest(storage=storage, selected=selected, diag=diag):
+                        observed = empirical[np.ix_(indices, indices)].copy()
+                        predicted = implied[np.ix_(indices, indices)].copy()
+                        if diag:
+                            np.fill_diagonal(observed, np.log(2.))
+                            np.fill_diagonal(predicted, np.log(2.))
+                        np.testing.assert_allclose(tree.information_matrix(selected, "empirical", diag),
+                                                   observed, rtol=1e-12, atol=1e-12)
+                        np.testing.assert_allclose(tree.information_matrix(selected, "chow_liu", diag),
+                                                   predicted, rtol=1e-12, atol=1e-12)
+                        expected = np.triu(observed) + np.tril(predicted, k=-1)
+                        np.testing.assert_allclose(tree.information_matrix(selected, "hybrid", diag),
+                                                   expected, rtol=1e-12, atol=1e-12)
+            self.assertEqual(list(tree.MI_graph.edges), edges)
+            self.assertFalse(tree._implied_marginals_set)
+            for edge, probability in probabilities.items():
+                self.assertIs(tree.MI_graph.edges[edge]["P"], probability)
+                self.assertNotIn("P_CL", tree.MI_graph.edges[edge])
+                self.assertNotIn("I_CL", tree.MI_graph.edges[edge])
+
+    def test_forest_distinguishes_measured_zero_missing_pairs_and_model_independence(self):
+        for storage in ("dense", "sparse"):
+            tree = model(storage, estimator="mle")
+            graph = tree.MI_graph.copy()
+            graph.remove_edge(NAMES[0], NAMES[2])
+            independent = "LYS1_C"
+            marginal = np.array([0., 0., .5, 0., 0., .5])
+            graph.add_node(independent, p=marginal, S=np.log(2.), N_states=2)
+            probability = np.outer(graph.nodes[NAMES[0]]["p"], marginal)
+            graph.add_edge(NAMES[0], independent, I=0., axes=(NAMES[0], independent),
+                           P=SparseProbability.encode(probability) if storage == "sparse" else probability)
+            forest = mist.MIST(graph, N_obs=200, entropy_estimator="mle")
+            # Removing this model edge leaves D as an independent component;
+            # its measured A,D table is still present in the empirical graph.
+            forest.T.remove_edge(NAMES[0], independent)
+            empirical, implied = expected_matrices()
+            expected_empirical = np.full((4, 4), np.nan)
+            expected_empirical[:3, :3] = empirical
+            expected_empirical[0, 2] = expected_empirical[2, 0] = np.nan
+            expected_empirical[0, 3] = expected_empirical[3, 0] = 0.
+            np.fill_diagonal(expected_empirical, 0.)
+            expected_implied = np.zeros((4, 4))
+            expected_implied[:3, :3] = implied
+            edges = list(forest.T.edges), list(forest.MI_graph.edges)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "forest.h5"
+                save_tree_h5(forest, path)
+                for source in (forest, load_h5_tree(path)):
+                    with self.subTest(storage=storage, source=type(source).__name__):
+                        np.testing.assert_allclose(source.empirical_information_matrix(), expected_empirical,
+                                                   rtol=1e-12, atol=1e-12)
+                        np.testing.assert_allclose(source.chow_liu_information_matrix(), expected_implied,
+                                                   rtol=1e-12, atol=1e-12)
+                        np.testing.assert_array_equal(source.chow_liu_information_matrix()[:3, 3], 0.)
+                        expected_hybrid = np.triu(expected_empirical) + np.tril(expected_implied, k=-1)
+                        np.testing.assert_allclose(source.information_matrix(kind="hybrid"), expected_hybrid,
+                                                   rtol=1e-12, atol=1e-12)
+                        np.testing.assert_array_equal(source.information_matrix([independent], diag=True),
+                                                      [[np.log(2.)]])
+                        self.assertEqual((list(source.T.edges), list(source.MI_graph.edges)), edges)
+                        self.assertFalse(source._implied_marginals_set)
+
+    def test_present_edge_without_information_still_fails(self):
+        tree = model()
+        del tree.MI_graph[NAMES[0]][NAMES[2]]["I"]
+        with self.assertRaisesRegex(KeyError, "I"):
+            tree.empirical_information_matrix()
 
 
 if __name__ == "__main__":

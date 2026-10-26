@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Includes a NeRFax converter modified for ciMIST's angle convention and
+# trajectory integration. See nerfax/NOTICE for the reference and changes.
+
 """
 Functions for manipulating trajectories and converting between Cartesian and internal coordinates.
 """

@@ -7,8 +7,8 @@ name = "cimist"
 version = "0.1.0"
 readme = "README.md"
 description = "Tools for inferring residue conformations, maximum information spanning trees, and conformational entropies from protein dynamics."
-license = "MIT"
-license-files = ["LICEN[CSE]*"]
+license = "Apache-2.0"
+license-files = ["LICEN[CSE]*", "src/cimist/utils/nerfax/NOTICE"]
 requires-python = ">=3.9"
 
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
     "h5py>=3.7.0",
     "scipy>=1.9.3",
     "pandas>=1.3.5",
-    "mdtraj>=1.9.7",
+    "mdtraj>=1.10.3",
     "Bio",
     "mp_nerf==1.0.3"
 ]

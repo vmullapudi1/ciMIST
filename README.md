@@ -18,7 +18,7 @@ The output of ciMIST is a thermodynamic network model that makes predictions abo
 - facilitate the visual interpretation of molecular dynamics trajectories
 
 ### How it works
-1. The trajectory is transformed to internal coordinates with [nerfax](https://github.com/PeptoneLtd/nerfax).
+1. The trajectory is transformed to internal coordinates with ciMIST's bundled, patched copy of [nerfax](https://github.com/PeptoneLtd/nerfax).
 2. Residue configurational probability densities are estimated with von Mises mixture models.
 3. Mixture components are clustered using a vectorized implementation of DBSCAN, producing residue conformations.
 4. From these, residue conformational entropies and mutual informations are estimated.
@@ -36,6 +36,14 @@ python -m pip install .
 
 ## Requirements (software)
 Python requirements are listed in `pyproject.toml`.
+MDTraj 1.10.3 or newer is required; 1.10.3 is the validated multichain baseline.
+
+The bundled [nerfax source](src/cimist/utils/nerfax) includes changes for physical
+bonded geometry, multichain identities, residue selection, reconstruction and
+JAX compatibility. It is distributed under the [Apache 2.0 license](LICENSE).
+The [nerfax change notice](src/cimist/utils/nerfax/NOTICE) records the upstream
+reference and local modifications; modified source files also carry notices.
+Use this bundled implementation when reproducing ciMIST's coordinate extraction.
 
 ## Requirements (hardware)
 We have typically run ciMIST on CPUs with between 256GB and 512GB of RAM.
@@ -98,15 +106,16 @@ An example demonstrating how to analyze outputs is given in [examples/CRIPT.ipyn
 
 ### Memory settings and output format
 
-Newton remains the default solver. This branch defaults to all residues per
-conformational-inference batch and 2,048 pairs per probability batch, targeting
-the usual 256 GB nodes. `--VMM_BATCH_SIZE 32` limits each EM, responsibility,
-component-distance and DBSCAN batch to 32 residues; `--PAIR_BATCH_SIZE 128`
-limits pair batches. Both retain every frame and selected pair. Smaller batches
-reduce temporary memory, but do not bound total memory: the trajectory, fitted
-models and candidate graph still need storage. Use `ci-mist --help` for all
-options. These defaults differ from the preceding Newton performance branch's
-EM32/pair128 settings.
+Newton remains the default solver. For either solver, the defaults are 32
+residues per conformational-inference batch and 128 pairs per probability batch,
+matching the preceding Newton performance branch. `--VMM_BATCH_SIZE` limits
+each EM, responsibility, component-distance and DBSCAN batch by residue;
+`--PAIR_BATCH_SIZE` limits pair batches. Both retain every frame and selected
+pair. Increase these values to use larger batches; a VMM batch at least as large
+as the selected residue count processes all selected residues together. Smaller
+batches reduce temporary memory, but do not bound total memory: the trajectory,
+fitted models and candidate graph still need storage. Use `ci-mist --help` for
+all options.
 
 `RESULTS_ciMIST.h5` is a lossless, versioned sparse snapshot, compressed with
 gzip by default. Load it with `cimist.io.load_h5_tree`; use
@@ -158,8 +167,10 @@ save_tree_h5(subset, "selected_tree.h5")
 
 Refitting builds a new tree from all selected empirical pairs, preserves the
 sample count, prior and estimator, and recomputes uncertainty without changing
-the parent model. `full.trim(names)` instead returns a display graph containing
-the selected nodes and their connecting paths through the full tree. Its
+the parent model. Missing selected pairs or required pair fields cause an error;
+they are not replaced with independent residues. `full.trim(names)` instead
+returns a display graph containing the selected nodes and their connecting paths
+through the full tree. Its
 `full_model_entropy_contribution` attributes follow paper Eq. 3; summing selected
 contributions gives their allocated share of full-system entropy, not a
 subsystem marginal entropy. For a singleton, aggregate uncertainty is retained;
@@ -178,6 +189,18 @@ shows mutual information implied by the fitted tree. Both use empirical
 probabilities; posterior estimates for tree edges remain available through
 `tree_MIs()`. Passing `resis=names` selects a matrix view of the existing model
 in canonical node order; it does not refit a subsystem tree.
+
+For a partial candidate graph, missing empirical pairs appear as `NaN`, while
+measured zero MI remains zero. A missing tree edge does not imply zero MI:
+`kind="chow_liu"` calculates dependence along the connecting tree path, even
+when the direct empirical pair is unavailable. For a disconnected tree (forest),
+this view and `joint_distribution` treat the components as independent, extending
+paper Eq. 1 to a product of component distributions. Cross-component tree-implied
+MI is therefore zero; this is a model assumption, not measured independence.
+`kind="hybrid"` places empirical values above and tree-implied values below the
+diagonal. These views do not add edges or change the fitted model. Normal
+trajectory inference still evaluates every selected pair and fits a connected
+tree (or a singleton).
 
 ## Visualization of results in PyMOL
 The program will create a directory of your choosing containing pre-generated scripts that will visualize trees on protein structure.
@@ -249,8 +272,8 @@ HDF5 layout; older files are not supported by this reader.
 
 ### Fitting and memory options
 
-The `ci-mist` CLI defaults to sparse probability storage, pair batches of 2048,
-and EM batches covering all residues. Run normally to use these settings;
+The `ci-mist` CLI defaults to sparse probability storage, pair batches of 128,
+and EM batches of 32 residues. Run normally to use these settings;
 select dense in-memory arrays with `--probability_storage dense`.
 `--VMM_BATCH_SIZE` also bounds the final responsibility update, component
 distance calculation and DBSCAN by residue. It preserves all frames and

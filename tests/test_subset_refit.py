@@ -224,6 +224,40 @@ class SubsetRefit(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "empty"):
             MIST.from_residue_states(select_states(residue_states(), []), [])
 
+    def test_missing_selected_pair_rejected_without_mutating_parent(self):
+        states = residue_states()
+        parent = fit(states, probability_storage="sparse")
+        parent.MI_graph.remove_edge(NAMES[1], NAMES[2])
+        before = copy.deepcopy(parent)
+        for selected in (NAMES, NAMES[1:3]):
+            with self.subTest(selected=selected), \
+                    patch.object(MIST, "__init__", side_effect=AssertionError("Must reject before refitting")):
+                with self.assertRaisesRegex(ValueError, "Missing empirical pair") as error:
+                    parent.refit_to_subset(selected)
+                self.assertIn(NAMES[1], str(error.exception))
+                self.assertIn(NAMES[2], str(error.exception))
+        self.assert_models_equal(parent, before)
+        # Missing pairs outside the requested subset do not prevent a valid refit.
+        for indices in ([0, 1], [2]):
+            selected = [NAMES[index] for index in indices]
+            actual = parent.refit_to_subset(selected[::-1])
+            expected = fit(select_states(states, indices), selected, probability_storage="sparse")
+            self.assert_models_equal(actual, expected)
+        self.assert_models_equal(parent, before)
+
+    def test_incomplete_selected_pair_fields_rejected_before_refit(self):
+        for field in ("P", "I", "axes"):
+            with self.subTest(field=field):
+                parent = fit(residue_states(), probability_storage="sparse")
+                del parent.MI_graph[NAMES[1]][NAMES[2]][field]
+                before = copy.deepcopy(parent)
+                with patch.object(MIST, "__init__", side_effect=AssertionError("Must reject before refitting")):
+                    with self.assertRaisesRegex(ValueError, "Incomplete empirical pair") as error:
+                        parent.refit_to_subset(NAMES[1:3])
+                self.assertIn(NAMES[1], str(error.exception))
+                self.assertIn(NAMES[2], str(error.exception))
+                self.assert_models_equal(parent, before)
+
     def test_selection_metadata_tracks_subsystem_and_display_provenance(self):
         parent = fit(residue_states(), probability_storage="sparse")
         metadata = dict(semantics="marginal", expression="protein", seed=0,

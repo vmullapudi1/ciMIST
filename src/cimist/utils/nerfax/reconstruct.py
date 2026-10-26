@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modified from NeRFax for ciMIST: package imports and JAX compatibility.
+# See NOTICE in this directory for the upstream reference and local changes.
+
 from typing import Any, Callable, Sequence, Optional
 from functools import partial
 import jax

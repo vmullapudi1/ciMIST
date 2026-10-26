@@ -5,6 +5,7 @@ import unittest
 import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
+import networkx as nx
 import numpy as np
 
 from cimist.mist import MIST, get_log_prob_and_sampling_fns, joint_distribution
@@ -90,6 +91,24 @@ class TreeProbabilities(unittest.TestCase):
                     self.assertEqual(edges, [(root, next(node for node in NAMES if node != root))])
                     self.assert_probabilities(log_prob, barcodes, expected.ravel())
                     self.assert_valid_samples(sample, expected)
+
+    def test_disconnected_joint_factorizes_without_changing_empirical_pair(self):
+        for storage in ("dense", "sparse"):
+            with self.subTest(storage=storage):
+                tree = model(TRACES, NAMES, storage)
+                measured = tree.MI_graph.edges[tuple(NAMES)]["P"]
+                tree.T.remove_edge(*NAMES)
+                first, second = (np.asarray(tree.nodes[node]["p"]) for node in NAMES)
+                expected = np.outer(first, second)
+                np.testing.assert_array_equal(joint_distribution(tree, *NAMES), expected)
+                np.testing.assert_array_equal(joint_distribution(tree, *NAMES[::-1]), expected.T)
+                np.testing.assert_array_equal(expected.sum(axis=1), first)
+                np.testing.assert_array_equal(expected.sum(axis=0), second)
+                self.assertIs(tree.MI_graph.edges[tuple(NAMES)]["P"], measured)
+                self.assertEqual(tree.T.number_of_edges(), 0)
+                for nodes in ((NAMES[0], "unknown"), ("unknown", NAMES[1])):
+                    with self.assertRaises(nx.NodeNotFound):
+                        joint_distribution(tree, *nodes)
 
 
 if __name__ == "__main__":

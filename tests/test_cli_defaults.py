@@ -21,8 +21,8 @@ INPUT_ARGS = ["-t", "trajectory.xtc", "-s", "topology.pdb", "-o", "run"]
 class CLIDefaults(unittest.TestCase):
     def test_benchmarked_defaults_and_overrides(self):
         args = parse_args(INPUT_ARGS)
-        self.assertEqual(args.VMM_BATCH_SIZE, None)
-        self.assertEqual(args.PAIR_BATCH_SIZE, 2048)
+        self.assertEqual(args.VMM_BATCH_SIZE, 32)
+        self.assertEqual(args.PAIR_BATCH_SIZE, 128)
         self.assertEqual(args.probability_storage, "sparse")
         self.assertEqual(args.hdf5_compression, "gzip")
         override = parse_args([*INPUT_ARGS, "--VMM_BATCH_SIZE", "100", "--PAIR_BATCH_SIZE", "999",
